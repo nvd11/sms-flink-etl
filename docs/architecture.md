@@ -47,6 +47,15 @@
   2. **原生 x86_64 指令集优势**：NUC 为标准 Intel x86_64 硬件体系，规避了 ARM64 跨平台镜像编译或依赖项不兼容的隐患，可直接以最高性能原生运行标准 Flink 官方镜像；
   3. **短连接消解家宽短板**：由于前置决策定下了“每 4 小时批处理短连接拉取”，拉取操作仅需 1~2 秒，经本地家庭代理即可顺畅穿透，彻底避开了长连接在家庭网络下的掉线风险。
 
+### ADR-005: 基础设施与应用统一通过 ArgoCD GitOps 交付部署
+* **背景**：在主人的跨云跨边缘 K3s 架构演进原则中，裸机手工安装与纯命令行 `kubectl apply` 属于开倒车行为。集群内所有服务（fastapi-svc、quarkus-svc、Kong Gateway、Redis）已全量实现 GitOps 化。
+* **决策**：Flink 批处理 CronJob、ConfigMap 与 Secret 清单统一纳入 GitOps 规范，由主人的中央仓库 [`my-argocd-manifests`](https://github.com/nvd11/my-argocd-manifests) 统一托管发布。
+* **架构落地规范**：
+  1. **App-of-Apps 模式编排**：在 `my-argocd-manifests/argocd-apps/` 目录下新增 `sms-flink-etl-app.yaml`，声明 Application 监听本项目的 `k8s/` 目录；
+  2. **自动化同步与自愈**：启用 `automated.prune: true` 与 `automated.selfHeal: true`，确保集群运行状态始终严格收敛于 Git 代码声明；
+  3. **环境隔离与凭证解耦**：数据库账号密码及 Gmail 应用授权码通过 Kubernetes Secret 注入，不随公共镜像提交；
+  4. **零感知升级与故障回退**：应用镜像或正则逻辑更新时，只需提交 Git，ArgoCD 自动轮询同步并在 NUC 节点应用生效。
+
 ---
 
 ## 3. Flink 处理流水线与算子规格设计

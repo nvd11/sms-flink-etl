@@ -71,6 +71,13 @@
      * **原生 x86_64 体系**：无须任何 ARM 交叉编译或指令集兼容性顾虑，Flink 官方镜像开箱即用；
      * **短连接极低风险**：4 小时一次的 1~2 秒短请求，经本地代理环境平稳穿透，无网络掉线顾虑。
 
+5. **部署与运维规范：统一通过 ArgoCD GitOps 声明式交付**
+   * **决策**：Flink on K3s 基础设施与 CronJob 清单严禁手工 `kubectl apply`，必须纳管入主人的中央 GitOps 仓库（[`my-argocd-manifests`](https://github.com/nvd11/my-argocd-manifests)），由 ArgoCD 自动轮询与收敛。
+   * **收益**：
+     * **配置即代码**：与集群内其他核心工作负载（fastapi-svc、quarkus-svc、Kong、Redis）遵循 100% 一致的 GitOps 规范；
+     * **自愈与防漂移**：ArgoCD 持续检测集群真实状态与 Git 仓库差异，自动修正任何非预期的配置漂移；
+     * **统一控制台与审计**：在 ArgoCD 控制台（`https://argo.jppwl.asia`）统一监控同步健康度，支持秒级一键回滚。
+
 ---
 
 ## 🗂️ 文档与目录导引
