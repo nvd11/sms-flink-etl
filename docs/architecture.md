@@ -1,4 +1,4 @@
-# Java Flink on K3s 短信流式/批处理 ETL 架构设计规格书
+# Java Flink on GitHub Actions Cron 短信批处理 ETL 架构设计规格书
 
 本文档作为 **SMS Flink ETL** 项目的核心技术架构设计规范，全面记录系统的设计背景、选型推演、架构决策记录 (ADR) 以及各模块技术规范。
 
@@ -8,10 +8,10 @@
 
 * **业务定位**：构建个人高可靠财务动账数据管道，将银行交易（广发信用卡 95508）、微信支付及支付宝动账凭证汇聚入统一结构化数据仓库。
 * **数据流向**：
-  `手机端 (SmsForwarder) ➔ 163 邮箱 SMTP ➔ Alice Gmail ➔ K3s Flink ETL ➔ CockroachDB ("finance-db")`
+  `手机端 (SmsForwarder) ➔ 163 邮箱 SMTP ➔ Alice Gmail ➔ GitHub Actions Cron (Flink BATCH) ➔ CockroachDB ("finance-db")`
 * **核心原则**：
   1. **架构先行**：先打磨好技术选型、拓扑流向与 DDL，再进入工程实施；
-  2. **轻量与弹性**：杜绝资源空耗与过度设计，计算随用随起，算完即焚；
+  2. **轻量与弹性 (Zero-Cost Serverless)**：借助 Public 仓库红利彻底解放本地硬件算力，算完即焚，不花一分钱；
   3. **数据幂等与高保真**：保留完整短信原文，依赖唯一指纹杜绝重复记账。
 
 ---
@@ -19,19 +19,19 @@
 ## 2. 核心架构决策记录 (Architectural Decision Records - ADR)
 
 ### ADR-001: 计算范式由 7x24 常驻流转为周期性批处理 (Cron BATCH)
-* **背景**：原方案假定 Flink 需 7x24 小时保持运行。但个人短信动账属于低频稀疏事件流（日均 5~20 条）。若常驻 Flink 集群，JVM 空载即需 1~2GB 内存开销。
+* **背景**：原方案假定 Flink 需 7x24 小时保持运行。但个人短信动账属于低频稀疏事件流（日均 5~20 条）。若常驻流集群，JVM 空载即需 1~2GB 内存开销。
 * **决策**：采用 **Flink 批处理模式 (`RuntimeExecutionMode.BATCH`)**，配置 **每 4 小时调度一次 (一天 6 批)**。
 * **收益**：
-  * 对标 **GCP Dataflow 弹性批处理哲学**：由 Kubernetes CronJob 动态调起单 Pod，处理完毕进程正常退出，Pod 被回收，平时维持 **0 CPU、0 内存** 纯净状态；
+  * 对标 **GCP Dataflow 弹性批处理哲学**：定时动态调起 Runner，处理完毕进程正常退出并回收算力，平时维持 **0 CPU、0 内存** 纯净状态；
   * 彻底消解 Watermark 乱序、窗口漂移与流作业复杂状态快照的维护负担。
 
 ### ADR-002: 数据源接入采用短连接主动拉取 (Short-Polling)
-* **背景**：IMAP 协议在网络抖动或家庭代理切换时极易发生 TCP 连接重置。若在流作业中维护长连接，极易引发连续 Failover 重启。
+* **背景**：IMAP 协议在长连接保持下易受网络重置困扰，一旦断流极易引发作业重启。
 * **决策**：每 4 小时启动时，建立一次性短连接（耗时约 1~2 秒），根据当前数据库内已有的 `MAX(email_uid)` 获取新邮件，抓取完成后立刻优雅断开释放连接。
 
 ### ADR-003: 目标数据库选定 CockroachDB Serverless
 * **选型对比**：
-  * **本地自建 Postgres**：需在 NUC 上自建维护 StatefulSet/PV，存在运维心智负担；
+  * **本地自建 Postgres**：需在本地维护存储介质与备份，存在运维心智负担；
   * **OCI MySQL HeatWave (50GB)**：Always Free 实例，但目前主要用于 LiteLLM 生产调用流水；
   * **CockroachDB Serverless (10GB)**：托管于 AWS 新加坡机房，支持原生 PostgreSQL 14 语法协议，自带 10GB 终身免费配额与每月 50M RU 免费算力，具备闲置自动 Scale to Zero 能力。
 * **决策**：选定 **CockroachDB Serverless** 作为动账专属数据库。已初始化独立数据库 **`finance-db`** 与专用业务账号 **`finance_user`**。
@@ -39,22 +39,22 @@
   * 原生支持 **`JSONB`**，可对多变的非结构化短信特征建立灵活扩展字段；
   * 原生支持 `ON CONFLICT (email_uid) DO UPDATE` 语法，提供端到端幂等写入保证。
 
-### ADR-004: 运行节点正式选定锁定本地 NUC (kubernetes.io/hostname=nuc)
-* **背景**：K3s 业务集群跨越云端与家庭边缘。其中腾讯云控制面仅 4G 内存，绝不可容纳 JVM 算力；而候选节点主要为新加坡 OCI ARM (24G) 与本地 NUC (16G)。
-* **决策**：正式拍板将 Flink 批处理调度在 **本地 NUC 节点**（`100.104.150.19`），通过 Pod Template 的 `nodeSelector: kubernetes.io/hostname: nuc` 进行精确绑定。
-* **收益与合理性**：
-  1. **内存极度宽裕**：NUC 拥有高达 **13 GiB 的空闲可用物理内存**（当前仅使用 2.0G），可从容承载 Flink JVM 进程的拉起与 GC，零内存瓶颈风险；
-  2. **原生 x86_64 指令集优势**：NUC 为标准 Intel x86_64 硬件体系，规避了 ARM64 跨平台镜像编译或依赖项不兼容的隐患，可直接以最高性能原生运行标准 Flink 官方镜像；
-  3. **短连接消解家宽短板**：由于前置决策定下了“每 4 小时批处理短连接拉取”，拉取操作仅需 1~2 秒，经本地家庭代理即可顺畅穿透，彻底避开了长连接在家庭网络下的掉线风险。
+### ADR-004: 调度与计算底座锁定 GitHub Actions Cron (Public Repo 终身免费)
+* **背景评估**：
+  * 原方案考虑部署在本地 NUC 的 K3s CronJob 上，虽然可行，但存在两项客观约束：(1) 本地家庭网络拉取海外 Gmail 需走代理穿透；(2) 本地硬件不可关机/断网。
+  * 本仓库为 **公开开源项目 (Public Repository)**，享有 GitHub 官方赋予的 **无限制分钟数 (Unlimited Minutes)** 政策。
+* **决策**：将调度器与计算执行载体全面上云，锁定为 **GitHub Actions Scheduled Workflow**。
+* **架构收益**：
+  1. **本地硬件与集群零开销**：NUC、K3s、OCI 资源开销全部为 0，本地 PC 或 NUC 关机完全不影响动账入库；
+  2. **绝对纯净的海外云网络链路**：GitHub Actions Runner 位于海外原生云机房，访问 Gmail IMAP（Google 海外服务器）与 CockroachDB（AWS 新加坡）均为原生公网高速互通，彻底免除国内代理断流和 GFW 阻断问题；
+  3. **自带高可用与开箱即用可视化**：GitHub 官方提供运行历史列表、控制台日志、执行耗时分析及失败邮件主动告警；同时自带 `workflow_dispatch` 手工一键即席补跑能力。
 
-### ADR-005: 基础设施与应用统一通过 ArgoCD GitOps 交付部署
-* **背景**：在主人的跨云跨边缘 K3s 架构演进原则中，裸机手工安装与纯命令行 `kubectl apply` 属于开倒车行为。集群内所有服务（fastapi-svc、quarkus-svc、Kong Gateway、Redis）已全量实现 GitOps 化。
-* **决策**：Flink 批处理 CronJob、ConfigMap 与 Secret 清单统一纳入 GitOps 规范，由主人的中央仓库 [`my-argocd-manifests`](https://github.com/nvd11/my-argocd-manifests) 统一托管发布。
-* **架构落地规范**：
-  1. **App-of-Apps 模式编排**：在 `my-argocd-manifests/argocd-apps/` 目录下新增 `sms-flink-etl-app.yaml`，声明 Application 监听本项目的 `k8s/` 目录；
-  2. **自动化同步与自愈**：启用 `automated.prune: true` 与 `automated.selfHeal: true`，确保集群运行状态始终严格收敛于 Git 代码声明；
-  3. **环境隔离与凭证解耦**：数据库账号密码及 Gmail 应用授权码通过 Kubernetes Secret 注入，不随公共镜像提交；
-  4. **零感知升级与故障回退**：应用镜像或正则逻辑更新时，只需提交 Git，ArgoCD 自动轮询同步并在 NUC 节点应用生效。
+### ADR-005: 凭证与机密隔离标准 (GitHub Repository Secrets)
+* **决策**：虽然代码库公开透明，但任何生产凭证严禁硬编码。
+* **注入规范**：
+  * `GMAIL_IMAP_USER`、`GMAIL_IMAP_PASS`（Alice Gmail 应用授权码）
+  * `DB_URL`、`DB_USER`、`DB_PASS`（CockroachDB 连接串）
+  统一在 GitHub Repository Settings ➔ Secrets and variables ➔ Actions 中进行强加密保存，仅在 Workflow 运行时作为环境变量注入 JVM 内存。
 
 ---
 
@@ -119,17 +119,3 @@
 * 当前 `finance-db` 保持**纯净库**状态；
 * 完整数据表定义见 [`docs/schema.sql`](schema.sql)；
 * 所有字段均设计有时区支持（`TIMESTAMPTZ`）与高精度数值支持（`NUMERIC(12, 2)`），严禁使用浮点数存储金融金额。
-
----
-
-## 5. Flink 批处理作业部署与 GitOps 交付体系
-
-详细的端到端自动化部署规范已独立沉淀至：[`docs/deployment.md`](deployment.md)。
-
-### 核心交付准则概览：
-1. **GitHub Actions 自动化 CI**：`mvn test` ➔ `mvn package` (Fat JAR) ➔ 构建 x86_64 Docker 原生镜像 ➔ 推送 GHCR；
-2. **K3s 声明式 CronJob 清单 (`k8s/`)**：钉死在本地 NUC 节点 (`nodeSelector: kubernetes.io/hostname=nuc`)，配置 `0 */4 * * *` 定时调度与资源配额；
-3. **中央 ArgoCD GitOps 纳管**：由 `my-argocd-manifests/argocd-apps/sms-flink-etl-app.yaml` 统一跟踪发布，杜绝生产环境手工 `kubectl apply`；
-4. **弹性生命周期**：整点按需起单 Pod 运行 10~20 秒，算完即焚释放全部内存；
-5. **多 Job 扩展能力**：通过共享同一个 Fat JAR，在 `k8s/` 目录下添加不同调度周期或主类名的 CronJob YAML，即可横向扩展对账、汇总等多类批作业。
-
