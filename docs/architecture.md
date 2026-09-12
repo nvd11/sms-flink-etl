@@ -97,7 +97,7 @@
 * 纯净 SQL：
   ```sql
   INSERT INTO raw_sms_records (
-      msg_uid, source_type, channel, sender, device_name,
+      msg_uid, source_type, channel, sender, receiver_phone,
       received_at, raw_subject, raw_body, extra_metadata
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
   ON CONFLICT (msg_uid) DO NOTHING;
