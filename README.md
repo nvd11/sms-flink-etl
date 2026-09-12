@@ -27,7 +27,7 @@
 +-----------------------------------------------------------------------------------+
 |  [调度与弹性算力] K3s 业务集群 (`tencent-dp1-cluster`)                            |
 |  - 调度器: Kubernetes CronJob (类比 GCP Dataflow Serverless 弹性理念)             |
-|  - 计算节点: 本地 NUC (13G 闲置内存) 或 OCI free-arm-vm (18G 可用，同城直连)     |
+|  - 计算节点: 锁定本地 NUC (13G 闲置内存 · nodeSelector: kubernetes.io/hostname=nuc) |
 |                                                                                   |
 |  ┌─────────────────────────────────────────────────────────────────────────────┐  |
 |  │  临时拉起单 Pod: Java Flink (RuntimeExecutionMode.BATCH)                    │  |
@@ -63,6 +63,13 @@
    * **决策**：舍弃本地自建运维与 MySQL 混合存储，选用已完成探活的 **CockroachDB Serverless**（AWS 新加坡节点，10GB 空间，每月 50M RU 免费额度）。
    * **专用库与账号**：已开辟独立数据库 `"finance-db"` 及业务用户 `finance_user`（目前保持纯净无表，由迁移管理受控初始化）。
    * **SQL 特权**：全面拥抱 PostgreSQL 协议生态，原生支持 `JSONB` 灵活存取各类未知短信元数据，并使用 `ON CONFLICT (email_uid) DO UPDATE` 实现端到端 Exactly-Once 语义。
+
+4. **算力节点选定：锁定本地 NUC 节点 (`kubernetes.io/hostname=nuc`)**
+   * **决策**：Flink 批处理 CronJob 钉死在 K3s 集群的 **本地 NUC 节点**（`100.104.150.19`）。
+   * **收益**：
+     * **13GB 充沛可用内存**：彻底杜绝 JVM 对云端小节点（如腾讯云 4G 控制面）的内存挤压；
+     * **原生 x86_64 体系**：无须任何 ARM 交叉编译或指令集兼容性顾虑，Flink 官方镜像开箱即用；
+     * **短连接极低风险**：4 小时一次的 1~2 秒短请求，经本地代理环境平稳穿透，无网络掉线顾虑。
 
 ---
 
