@@ -58,64 +58,56 @@
 
 ---
 
-## 3. Flink 处理流水线与算子规格设计
+## 3. Flink 处理流水线与数仓分层设计
+
+系统严格遵循数据仓库经典分层架构与数据库第三范式 (3NF)：
+* **ODS 层 (Operational Data Store · 原始报文层)**：本工程当前核心目标，**纯粹落盘原始报文与物理元数据，不掺杂任何业务解析/派生字段**，保证不可变性与绝对保真；
+* **DWD 层 (Data Warehouse Detail · 明细事实层)**：下游衍生任务负责读取 ODS 表，执行正则模式提取、动账归类与结构化清洗（金额、商户、卡号、交易时间），落地为结构化消费事实表。
 
 ```text
-[ EmailImapBatchSource ] 
-          │ (输出 EmailMessage: uid, sender, subject, body, date)
-          ▼
-   [ SmsParserFlatMap ]
-          │ (正则模式提取: 卡号、金额、商户、动账分类)
-          ▼
-   [ SmsRecordBuilder ]
-          │ (组装 SmsRecord 实体 + 填充 extra_metadata JSONB)
-          ▼
-    [ CockroachJdbcSink ]
-          │ (Batch Upsert: ON CONFLICT (email_uid) DO UPDATE)
-          ▼
-      [ DB 落盘完成 ]
+[ 采集端 (SmsForwarder ➔ Gmail) ]
+              │
+              ▼
+[ EmailImapBatchSource ] (短连接拉取原始邮件 DTO)
+              │
+              ▼
+[ RawRecordFormatter ] (物理元数据规整 + JSONB 扩展提取)
+              │
+              ▼
+[ CockroachRawSink ] (ODS 纯粹原始报文持久化: raw_sms_records)
+              │  (ON CONFLICT (msg_uid) DO NOTHING - Append-Only)
+              ▼
+============================ ODS 数据底座已落稳 ============================
+              │
+              ▼
+    (下游 DWD 任务消费 / 正则解析) ➔ 落地消费明细事实表 (fct_transactions)
 ```
 
-### 3.1 Source 算子 (`EmailImapBatchSource`)
+### 3.1 ODS Source 算子 (`EmailImapBatchSource`)
 * 协议：Jakarta Mail / IMAP over SSL (Port 993)；
 * 认证：应用专用密码授权 (`alice.h.y.he@gmail.com`)；
 * 检索策略：
-  1. 优先读取数据库当前最高 `email_uid`；
+  1. 优先读取 ODS 表当前已有的 `msg_uid` 或时间水位；
   2. 构造 `SearchTerm` 仅拉取增量或 `UNSEEN` 邮件；
-  3. 读取完成后批量 Emits 邮件对象进入下游，随后关闭 Folder 与 Store 连接。
+  3. 批量拉取邮件原始主题、发送方、正文全文与时间戳后即刻关闭连接。
 
-### 3.2 Transform 算子 (`SmsParserFlatMap`)
-* 规则引擎维护预定义正则表达式字典：
-  * **广发银行信用卡 (95508)**：
-    * 模式：`您尾号(?<card>\d{4})广发卡(?<time>[^消费]+)消费人民币(?<amount>[\d\.]+)元，商户：(?<merchant>[^。]+)`
-    * 提取结果：`card_no="3342"`, `amount=50.00`, `merchant="何贤纪念医院"`, `category="EXPENSE"`
-  * **微信支付通知 (`com.tencent.mm`)**：
-    * 提取服务号交易提醒的大文本、金额及收款方。
-  * **验证码短信**：
-    * 匹配包含“验证码”、“校验码”之短信，分类打标为 `AUTH_CODE`。
-* 兜底机制：未匹配到模式的通知打标为 `NOTICE`，完整保留原始报文进入 `raw_content`，绝不丢失任何审计信息。
-
-### 3.3 Sink 算子 (`CockroachJdbcSink`)
+### 3.2 ODS Sink 算子 (`CockroachRawSink`)
 * 驱动：PostgreSQL 官方 JDBC 驱动；
-* 批量策略：`JdbcExecutionOptions.builder().withBatchSize(50).withBatchIntervalMs(200).build()`；
-* 幂等 SQL：
+* 写入语义：**Append-Only 幂等入库**。当 `msg_uid` 冲突时直接 `DO NOTHING`，确保原始数据客观真实不可变。
+* 纯净 SQL：
   ```sql
   INSERT INTO raw_sms_records (
-      email_uid, source_type, sender, received_at, raw_subject,
-      raw_content, sms_category, parsed_amount, parsed_currency,
-      parsed_card_no, parsed_merchant, extra_metadata
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
-  ON CONFLICT (email_uid) DO UPDATE SET
-      parsed_amount = EXCLUDED.parsed_amount,
-      parsed_merchant = EXCLUDED.parsed_merchant,
-      sms_category = EXCLUDED.sms_category,
-      extra_metadata = EXCLUDED.extra_metadata;
+      msg_uid, source_type, channel, sender, device_name,
+      received_at, raw_subject, raw_body, extra_metadata
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+  ON CONFLICT (msg_uid) DO NOTHING;
   ```
 
 ---
 
 ## 4. 数据库 Schema 规范与迁移控制
 
+* **数仓分层铁律**：`raw_sms_records` 严禁出现业务解析列（如 `amount`、`merchant`、`card_no`），所有业务解析统一收敛至下游 DWD 表，避免范式破坏与更新异常；
 * 当前 `finance-db` 保持**纯净库**状态；
-* 完整数据表定义见 [`docs/schema.sql`](schema.sql)；
-* 所有字段均设计有时区支持（`TIMESTAMPTZ`）与高精度数值支持（`NUMERIC(12, 2)`），严禁使用浮点数存储金融金额。
+* 完整 ODS 数据表定义见 [`docs/schema.sql`](schema.sql)；
+* 时间统一采用带时区时间戳（`TIMESTAMPTZ`）。

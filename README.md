@@ -33,19 +33,18 @@
 |  ┌─────────────────────────────────────────────────────────────────────────────┐  |
 |  │  一次性拉起执行: Java Flink (RuntimeExecutionMode.BATCH)                    │  |
 |  │  1. Ingestion: 短连接检索 IMAP 增量邮件 (UID > max_uid / UNSEEN)            │  |
-|  │  2. FlatMap: 正则提取金额 (Amount)、商户 (Merchant)、卡号 (CardNo)、类别    │  |
-|  │  3. Formatting: 组装结构化实体 + JSONB 自由扩展元数据                       │  |
-|  │  4. Sink: Flink JDBC Batch Sink 执行幂等 Upsert                             │  |
-|  │  5. 退出结算: 进程正常退出 (耗时 10~20 秒)，GitHub 归档执行日志与监控指标    │  |
+|  │  2. Formatting: 物理元数据抽取与规整 + JSONB 自由扩展元数据                 │  |
+|  │  3. Sink: Flink JDBC Batch Sink 执行 Append-Only 幂等入库 (ON CONFLICT)     │  |
+|  │  4. 退出结算: 进程正常退出 (耗时 10~20 秒)，GitHub 归档执行日志与监控指标    │  |
 |  └─────────────────────────────────────────────────────────────────────────────┘  |
 +-----------------------------------------+-----------------------------------------+
                                           | JDBC over TLS 写入 (AWS 新加坡)
                                           v
 +-----------------------------------------------------------------------------------+
-|  [目标数据仓库] CockroachDB Serverless (Always Free 10GB · AWS 新加坡)            |
+|  [目标数据仓库 ODS 层] CockroachDB Serverless (Always Free 10GB · AWS 新加坡)     |
 |  - 数据库名: "finance-db"                                                         |
 |  - 专属用户: finance_user                                                         |
-|  - 核心表: raw_sms_records (PostgreSQL 14 兼容方言，含 JSONB 与 email_uid 唯一键)  |
+|  - 核心表: raw_sms_records (纯粹 ODS 原始报文表，严格杜绝业务解析派生字段)        |
 +-----------------------------------------------------------------------------------+
 ```
 
