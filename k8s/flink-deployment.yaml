@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flink-etl
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-config
+  namespace: flink-etl
+data:
+  flink-conf.yaml: |+
+    jobmanager.rpc.address: flink-jobmanager
+    taskmanager.numberOfTaskSlots: 2
+    parallelism.default: 1
+    state.backend: filesystem
+    state.checkpoints.dir: file:///tmp/flink-checkpoints
+    execution.checkpointing.interval: 15s
+    rest.port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: flink-etl
+  labels:
+    app: flink
+    component: jobmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: jobmanager
+    spec:
+      containers:
+        - name: jobmanager
+          image: ghcr.io/nvd11/sms-flink-etl:latest
+          imagePullPolicy: IfNotPresent
+          args: ["standalone-job", "--job-classname", "com.jppwl.etl.SmsFlinkEtlApp"]
+          ports:
+            - containerPort: 6123
+              name: rpc
+            - containerPort: 6124
+              name: blob-server
+            - containerPort: 8081
+              name: ui
+          env:
+            - name: IMAP_HOST
+              value: "imap.gmail.com"
+            - name: IMAP_PORT
+              value: "993"
+            - name: IMAP_USER
+              value: "alice.h.y.he@gmail.com"
+            - name: IMAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sms-etl-secret
+                  key: imap-password
+            - name: DB_URL
+              value: "jdbc:mysql://100.122.84.84:3306/litellm_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+            - name: DB_USER
+              value: "litellm_user"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sms-etl-secret
+                  key: db-password
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1024Mi"
+              cpu: "1000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  namespace: flink-etl
+  labels:
+    app: flink
+    component: taskmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: taskmanager
+    spec:
+      containers:
+        - name: taskmanager
+          image: ghcr.io/nvd11/sms-flink-etl:latest
+          imagePullPolicy: IfNotPresent
+          args: ["taskmanager"]
+          ports:
+            - containerPort: 6122
+              name: rpc
+            - containerPort: 6125
+              name: query-state
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1024Mi"
+              cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: flink-etl
+spec:
+  type: ClusterIP
+  ports:
+    - name: rpc
+      port: 6123
+    - name: blob-server
+      port: 6124
+    - name: ui
+      port: 8081
+  selector:
+    app: flink
+    component: jobmanager

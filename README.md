@@ -63,31 +63,59 @@
 
 ---
 
-## 🛠️ 技术选型与规范
+## 🚀 快速上手与编译运行
 
-1. **核心计算引擎**：Java Flink DataStream API
-2. **部署形态**：Flink on K3s（通过 Kubernetes Operator / Native Kubernetes Application Mode）
-3. **运维与持续交付**：ArgoCD 统一 GitOps 托管 (`my-argocd-manifests`)
-4. **容错机制**：基于 Checkpoint 的状态一致性保障，Exactly-Once / At-Least-Once + 幂等主键写入
+### 1. 运行单元测试
+```bash
+mvn test
+```
+
+### 2. 构建可执行 Fat JAR
+```bash
+mvn clean package -DskipTests
+```
+产物输出路径：`target/sms-flink-etl-1.0.0.jar`
+
+### 3. 本地或远程直接提交 Flink 执行
+```bash
+java -jar target/sms-flink-etl-1.0.0.jar \
+  --imap.user alice.h.y.he@gmail.com \
+  --imap.password <APP_PASSWORD> \
+  --db.url "jdbc:mysql://100.122.84.84:3306/litellm_db" \
+  --db.user litellm_user \
+  --db.password <DB_PASSWORD>
+```
+
+### 4. 部署至 K3s 集群 (Flink on K3s)
+```bash
+kubectl apply -f k8s/flink-deployment.yaml
+```
 
 ---
 
-## 📁 目录结构规划
+## 📁 目录结构
 
 ```
 sms-flink-etl/
 ├── docs/                      # 架构设计图与数据库 DDL
 │   ├── architecture.md
 │   └── schema.sql
-├── k8s/                       # Flink on K3s 部署清单与 ArgoCD 配置
-├── src/                       # Java Flink 源代码
-│   ├── main/
-│   │   ├── java/
-│   │   │   └── com/jppwl/etl/
-│   │   │       ├── FlinkSmsEtlApp.java
-│   │   │       ├── model/
-│   │   │       ├── parser/
-│   │   │       └── sink/
-│   │   └── resources/
-└── pom.xml                    # Maven 构建配置
+├── k8s/                       # Flink on K3s 部署清单 (JobManager, TaskManager, Service)
+│   └── flink-deployment.yaml
+├── src/
+│   ├── main/java/com/jppwl/etl/
+│   │   ├── SmsFlinkEtlApp.java     # Flink 主流水线入口与 Checkpoint 配置
+│   │   ├── model/
+│   │   │   ├── EmailMessage.java   # 邮件 DTO
+│   │   │   └── SmsRecord.java      # 短信/动账数据实体
+│   │   ├── parser/
+│   │   │   └── SmsParser.java      # 广发银行/微信/支付宝动账正则抽取器
+│   │   ├── sink/
+│   │   │   └── SmsJdbcSink.java    # Flink JDBC 幂等写入 Sink
+│   │   └── source/
+│   │       └── EmailImapSource.java # Flink IMAP 邮件长轮询 Source (含状态恢复)
+│   └── test/java/com/jppwl/etl/
+│       └── parser/SmsParserTest.java # 动账正则提取全覆盖单元测试
+├── Dockerfile                 # 多架构容器构建文件
+└── pom.xml                    # Maven 构建文件
 ```
