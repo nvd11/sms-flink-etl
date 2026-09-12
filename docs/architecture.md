@@ -119,3 +119,17 @@
 * 当前 `finance-db` 保持**纯净库**状态；
 * 完整数据表定义见 [`docs/schema.sql`](schema.sql)；
 * 所有字段均设计有时区支持（`TIMESTAMPTZ`）与高精度数值支持（`NUMERIC(12, 2)`），严禁使用浮点数存储金融金额。
+
+---
+
+## 5. Flink 批处理作业部署与 GitOps 交付体系
+
+详细的端到端自动化部署规范已独立沉淀至：[`docs/deployment.md`](deployment.md)。
+
+### 核心交付准则概览：
+1. **GitHub Actions 自动化 CI**：`mvn test` ➔ `mvn package` (Fat JAR) ➔ 构建 x86_64 Docker 原生镜像 ➔ 推送 GHCR；
+2. **K3s 声明式 CronJob 清单 (`k8s/`)**：钉死在本地 NUC 节点 (`nodeSelector: kubernetes.io/hostname=nuc`)，配置 `0 */4 * * *` 定时调度与资源配额；
+3. **中央 ArgoCD GitOps 纳管**：由 `my-argocd-manifests/argocd-apps/sms-flink-etl-app.yaml` 统一跟踪发布，杜绝生产环境手工 `kubectl apply`；
+4. **弹性生命周期**：整点按需起单 Pod 运行 10~20 秒，算完即焚释放全部内存；
+5. **多 Job 扩展能力**：通过共享同一个 Fat JAR，在 `k8s/` 目录下添加不同调度周期或主类名的 CronJob YAML，即可横向扩展对账、汇总等多类批作业。
+

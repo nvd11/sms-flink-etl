@@ -83,4 +83,5 @@
 ## 🗂️ 文档与目录导引
 
 * 详细架构设计与算子流水线：[`docs/architecture.md`](docs/architecture.md)
+* Flink Batch 作业部署与 GitOps 交付指南：[`docs/deployment.md`](docs/deployment.md)
 * 标准 PostgreSQL / CockroachDB DDL 规范：[`docs/schema.sql`](docs/schema.sql)
