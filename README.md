@@ -33,7 +33,7 @@
 |  ┌─────────────────────────────────────────────────────────────────────────────┐  |
 |  │  一次性拉起执行: Java Flink (RuntimeExecutionMode.BATCH)                    │  |
 |  │  1. Ingestion: 短连接检索 IMAP 增量邮件 (UID > max_uid / UNSEEN)            │  |
-|  │  2. Formatting: 物理元数据抽取与规整 + JSONB 自由扩展元数据                 │  |
+|  │  2. Formatting: 纯物理元数据抽取与规整 (零业务解析、零冗余 JSONB)           │  |
 |  │  3. Sink: Flink JDBC Batch Sink 执行 Append-Only 幂等入库 (ON CONFLICT)     │  |
 |  │  4. 退出结算: 进程正常退出 (耗时 10~20 秒)，GitHub 归档执行日志与监控指标    │  |
 |  └─────────────────────────────────────────────────────────────────────────────┘  |
@@ -62,7 +62,7 @@
 3. **目标数据库选定：CockroachDB Serverless (10GB Always Free)**
    * **决策**：选用已完成探活的 **CockroachDB Serverless**（AWS 新加坡节点，10GB 空间，每月 50M RU 免费额度）。
    * **专用库与账号**：已开辟独立数据库 `"finance-db"` 及业务用户 `finance_user`（目前保持纯净无表，由迁移管理受控初始化）。
-   * **SQL 特权**：全面拥抱 PostgreSQL 协议生态，原生支持 `JSONB` 灵活存取各类未知短信元数据，并使用 `ON CONFLICT (email_uid) DO UPDATE` 实现端到端 Exactly-Once 语义。
+   * **SQL 特权**：全面拥抱 PostgreSQL 严格类型约束，使用 `ON CONFLICT (msg_uid) DO NOTHING` 实现 ODS 层 Append-Only 幂等入库。
 
 4. **调度与运行底座：锁定 GitHub Actions Cron (Public Repo 零成本上云)**
    * **决策**：由于本项目为 **公开开源仓库 (Public Repo)**，根据 GitHub 官方政策，GitHub Actions **享受 100% 终身免费、无分钟上限 (Unlimited Minutes)**！

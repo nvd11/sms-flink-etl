@@ -36,8 +36,8 @@
   * **CockroachDB Serverless (10GB)**：托管于 AWS 新加坡机房，支持原生 PostgreSQL 14 语法协议，自带 10GB 终身免费配额与每月 50M RU 免费算力，具备闲置自动 Scale to Zero 能力。
 * **决策**：选定 **CockroachDB Serverless** 作为动账专属数据库。已初始化独立数据库 **`finance-db`** 与专用业务账号 **`finance_user`**。
 * **特性红利**：
-  * 原生支持 **`JSONB`**，可对多变的非结构化短信特征建立灵活扩展字段；
-  * 原生支持 `ON CONFLICT (email_uid) DO UPDATE` 语法，提供端到端幂等写入保证。
+  * 原生支持 PostgreSQL 严格类型约束与 `ON CONFLICT (msg_uid) DO NOTHING` 幂等写入保证，确保 ODS 层 Append-Only 真实保真；
+  * 免运维、高可用、10GB 终身免费配额。
 
 ### ADR-004: 调度与计算底座锁定 GitHub Actions Cron (Public Repo 终身免费)
 * **背景评估**：
@@ -71,7 +71,7 @@
 [ EmailImapBatchSource ] (短连接拉取原始邮件 DTO)
               │
               ▼
-[ RawRecordFormatter ] (物理元数据规整 + JSONB 扩展提取)
+[ RawRecordFormatter ] (物理元数据规整与类型映射)
               │
               ▼
 [ CockroachRawSink ] (ODS 纯粹原始报文持久化: raw_sms_records)
@@ -98,8 +98,8 @@
   ```sql
   INSERT INTO raw_sms_records (
       msg_uid, source_type, channel, sender, receiver_phone,
-      received_at, raw_subject, raw_body, extra_metadata
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+      received_at, raw_subject, raw_body
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (msg_uid) DO NOTHING;
   ```
 
