@@ -89,7 +89,7 @@
 * 检索策略：
   1. 优先读取 ODS 表当前已有的 `msg_uid` 或时间水位；
   2. 构造 `SearchTerm` 仅拉取增量或 `UNSEEN` 邮件；
-  3. 批量拉取邮件原始主题、发送方、正文全文与时间戳后即刻关闭连接。
+  3. 批量拉取发件人、收件号码、正文全文与时间戳后即刻关闭连接。
 
 ### 3.2 ODS Sink 算子 (`CockroachRawSink`)
 * 驱动：PostgreSQL 官方 JDBC 驱动；
@@ -98,8 +98,8 @@
   ```sql
   INSERT INTO raw_sms_records (
       msg_uid, source_type, channel, sender, receiver_phone,
-      received_at, raw_subject, raw_body
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      received_at, raw_body
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (msg_uid) DO NOTHING;
   ```
 
