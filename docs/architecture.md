@@ -97,9 +97,9 @@
 * 纯净 SQL：
   ```sql
   INSERT INTO raw_sms_records (
-      msg_uid, source_type, channel, sender, receiver_phone,
+      msg_uid, channel, sender, receiver_phone,
       received_at, raw_body
-  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT (msg_uid) DO NOTHING;
   ```
 
