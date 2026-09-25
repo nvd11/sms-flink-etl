@@ -1,8 +1,8 @@
-# SMS Flink ETL (个人动账与金融短信轻量级 ETL 架构规划)
+# SMS Flink ETL (个人动账与金融短信轻量级 Lakehouse 架构规划)
 
-基于 **Java Flink (BATCH Mode)** 与 **GitHub Actions Cron (Public Repo 终身无限免费)** 的个人全自动动账记账与流式/批处理 ETL 架构。
+基于 **Apache Flink + Trino on NUC (ArgoCD GitOps 双引擎治理)**、**Cloudflare R2 (10GB Always Free · Zero Egress)** 与 **Apache Iceberg (Parquet)** 的现代化个人全自动动账记账与开放数据湖仓 (Lakehouse) 架构。
 
-本项目设计并落地将来自手机端（小米 15 HyperOS + SmsForwarder）经网易 163 SMTP 中继汇聚至 Alice Gmail（`alice.h.y.he@gmail.com`）的银行交易动账短信（广发 95508）、微信支付凭证及支付宝出账通知，进行结构化清洗、正则抽取与幂等持久化，沉淀入统一的 Raw 动账明细数仓中。
+本项目设计并落地将来自手机端（小米 15 HyperOS + SmsForwarder）经网易 163 SMTP 中继汇聚至 Alice Gmail（`alice.h.y.he@gmail.com`）的银行交易动账短信（广发 95508）、微信支付凭证及支付宝出账通知，由本地 NUC 节点上通过 **ArgoCD GitOps** 纳管的 **Flink 计算引擎** 进行定时增量摄入、结构化清洗与元数据规整，写入开放湖仓表格式 **Apache Iceberg** 并持久化沉淀于 **Cloudflare R2** 对象存储中，同时由同驻 NUC 的 **Trino MPP 查询引擎** 提供极致标准的 ANSI SQL 查询与金融审计切片分析体验。
 
 ---
 
@@ -21,30 +21,36 @@
 |  [汇聚中心] Alice 专属 Gmail 邮箱 (alice.h.y.he@gmail.com)                        |
 |  - 作为高可靠的海外原始报文缓冲区 (无需自建重型 MQ)                              |
 +-----------------------------------------+-----------------------------------------+
-                                          | 每 4 小时定时触发 (0 */4 * * *)
-                                          | 海外原生云网络直连，零墙零代理，毫秒响应
+                                          | 定时触发 / 增量检索 (IMAP over TLS)
                                           v
 +-----------------------------------------------------------------------------------+
-|  [调度与算力底座] GitHub Actions Scheduled Runner (Public Repo · 100% 终身免费)    |
-|  - 调度器: GitHub Actions Cron Workflow (`.github/workflows/scheduled-etl.yml`)   |
-|  - 计算节点: GitHub-hosted Ubuntu Runner (2 vCPU, 7GB RAM, 算完即释放)             |
-|  - 资源开销: 本地 NUC / K3s 集群 0 占用，家庭网络即使断网/关机依然稳定运行         |
+|  [统一计算与控制底座] Intel NUC (`Nova` · 16GB RAM · 13.4GB 空闲 · x86_64)          |
+|  - 集群归属: K3s 业务集群 (`tencent-dp1-cluster` Worker 节点)                     |
+|  - 全局治理: 阿里云 ArgoCD 控制面声明式 GitOps 统一纳管 (`my-argocd-manifests`)    |
 |                                                                                   |
 |  ┌─────────────────────────────────────────────────────────────────────────────┐  |
-|  │  一次性拉起执行: Java Flink (RuntimeExecutionMode.BATCH)                    │  |
-|  │  1. Ingestion: 短连接检索 IMAP 增量邮件 (UID > max_uid / UNSEEN)            │  |
-|  │  2. Formatting: 纯物理元数据抽取与规整 (零业务解析、零冗余 JSONB)           │  |
-|  │  3. Sink: Flink JDBC Batch Sink 执行 Append-Only 幂等入库 (ON CONFLICT)     │  |
-|  │  4. 退出结算: 进程正常退出 (耗时 10~20 秒)，GitHub 归档执行日志与监控指标    │  |
+|  │  1. 湖仓计算引擎: Apache Flink (ArgoCD 纳管部署 · 轻量 JVM -Xmx2G)          │  |
+|  │  - 模式: K3s 批处理 CronJob / Flink Application                             │  |
+|  │  - 算子流水: EmailImapSource ➔ RawRecordFormatter ➔ IcebergBatchSink       │  |
+|  │  - 可观测性: Flink Web Dashboard (`10.0.1.113:8081` / `flink.jppwl.asia`)  │  |
+|  └─────────────────────────────────────────────────────────────────────────────┘  |
+|                                          │ S3A over TLS 直写 (零出网流量费)
+|                                          v
+|  ┌─────────────────────────────────────────────────────────────────────────────┐  |
+|  │  2. 湖仓查询引擎: Trino MPP Engine (ArgoCD 纳管部署 · 轻量 JVM -Xmx3G)      │  |
+|  │  - 功能: 直读 R2 上 Iceberg 表的 Parquet 列存文件与 Snapshot 快照树         │  |
+|  │  - 体验: 开放 ANSI SQL、Time Travel 审计历史切片回溯、DBeaver 交互秒级响应  │  |
+|  │  - 可观测性: Trino Web Dashboard (`10.0.1.113:8080` / `trino.jppwl.asia`)  │  |
 |  └─────────────────────────────────────────────────────────────────────────────┘  |
 +-----------------------------------------+-----------------------------------------+
-                                          | JDBC over TLS 写入 (AWS 新加坡)
+                                          | 远端对象存储挂载与持久化
                                           v
 +-----------------------------------------------------------------------------------+
-|  [目标数据仓库 ODS 层] CockroachDB Serverless (Always Free 10GB · AWS 新加坡)     |
-|  - 数据库名: "finance-db"                                                         |
-|  - 专属用户: finance_user                                                         |
-|  - 核心表: raw_sms_records (纯粹 ODS 原始报文表，严格杜绝业务解析派生字段)        |
+|  [数据湖仓底座 ODS 层] Cloudflare R2 (10GB Always Free · Zero Egress)              |
+|  - 存储桶: "sms-flink-etl" (APAC 亚太机房)                                        |
+|  - 表格式: Apache Iceberg (Parquet 列式存储 + Snapshot 元数据树)                  |
+|  - 核心表: iceberg.finance.raw_sms_records (纯粹 ODS 原始报文不可变表)            |
+|  - 核心红利: 10GB 免费空间、100万写/1000万读、全球首创 0 出口流量费 ($0 Egress)    |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -52,32 +58,30 @@
 
 ## 💡 最新核心架构决策记录 (ADR Summary)
 
-1. **计算范式：周期性批处理 (BATCH Mode) 替代 7x24 常驻流**
-   * **决策**：个人短信动账属于低频、偶发事件流（每天 5~20 笔）。采用 **每 4 小时调度一次 (一天 6 次)** 的节奏，由 定时任务 动态调起批计算任务，跑完即释放。
-   * **收益**：避免 JVM 7x24 空转常驻霸占内存；消解流状态快照维护负担。
-
-2. **数据源摄入：短连接轮询增量拉取**
-   * **决策**：任务启动时通过 IMAP 建立 1~2 秒短连接，依据当前数据库内记录的 `MAX(email_uid)` 仅拉取增量或 `UNSEEN` 邮件，抓取完毕即主动断开。
-
-3. **目标数据库选定：CockroachDB Serverless (10GB Always Free)**
-   * **决策**：选用已完成探活的 **CockroachDB Serverless**（AWS 新加坡节点，10GB 空间，每月 50M RU 免费额度）。
-   * **专用库与账号**：已开辟独立数据库 `"finance-db"` 及业务用户 `finance_user`（目前保持纯净无表，由迁移管理受控初始化）。
-   * **SQL 特权**：全面拥抱 PostgreSQL 严格类型约束，使用 `ON CONFLICT (msg_uid) DO NOTHING` 实现 ODS 层 Append-Only 幂等入库。
-
-4. **调度与运行底座：锁定 GitHub Actions Cron (Public Repo 零成本上云)**
-   * **决策**：由于本项目为 **公开开源仓库 (Public Repo)**，根据 GitHub 官方政策，GitHub Actions **享受 100% 终身免费、无分钟上限 (Unlimited Minutes)**！
+1. **计算与查询双引擎同宿：锁定 Intel NUC (Nova · ArgoCD GitOps 交付)**
+   * **决策**：将 **Flink (计算清洗)** 与 **Trino (交互查询)** 双引擎统一纳管在本地 **Intel NUC (`Nova` · 10.0.1.113)** 节点上，由 **ArgoCD GitOps** 实现全自动声明式部署与持续交付。
    * **收益**：
-     * **本地与集群 0 负担**：本地 NUC 与云端 K3s 不占用任何 CPU、内存或 Pod 额度，本地断电/关机对定时记账完全无影响；
-     * **海外原生网络优势**：GitHub Actions Runner 位于海外云机房，拉取海外 Gmail (`imap.gmail.com:993`) 与直连 AWS 新加坡 CockroachDB 属于纯海外骨干网光纤直连，零延迟、零网络墙干扰、零连接重置风险；
-     * **开箱即用的运维面板**：GitHub Actions 界面天然自带执行历史日志、运行耗时曲线、邮件失败告警与手工即席触发 (`workflow_dispatch`) 按钮。
+     * **充足闲置资源变现**：NUC 实测拥有 **13.4GB 闲置可用内存**，分配 Flink 2G + Trino 3G，总占用仅 ~5GB，系统仍保留 8GB+ 充裕内存；
+     * **标准大数据双看板体验**：同时享有 Flink Web UI (`:8081`) 与 Trino Web UI (`:8080`)，可集成 Kong 网关暴露专属域名；
+     * **企业级 GitOps 纪律**：所有 Deployment、Service、ConfigMap 和 Catalog 全部受控于 `my-argocd-manifests` 仓库。
 
-5. **机密与凭证隔离：GitHub Repository Secrets**
-   * **决策**：代码与 DDL 虽开源公开，但数据库连接串与 Gmail 应用专用密码严格隔离在 GitHub 仓库密钥（Secrets）中，执行时以环境变量安全注入，杜绝凭证泄露。
+2. **存储与湖仓底座：选定 Cloudflare R2 + Apache Iceberg**
+   * **决策**：摒弃传统封闭关系型数据库，全面拥抱 **现代化开放数据湖仓 (Lakehouse)** 架构。选用 **Cloudflare R2** 专属存储桶 `sms-flink-etl` 承载 **Apache Iceberg** 表。
+   * **收益**：
+     * **免除厂商锁定 (No Vendor Lock-in)**：开放 Parquet 列存标准，对标汇丰金融级 BigLake 湖仓战略；
+     * **彻底白嫖出网流量 (Zero Egress)**：Cloudflare R2 提供 10GB 永久免费空间、每月 100 万次写 + 1000 万次读，且出网流量永久 100% 免费；
+     * **ACID 快照与时间旅行**：天然支持 Snapshot Isolation 与审计切片回溯，满足金融级数据可回溯性。
+
+3. **CI/CD 流水线职责明确：GitHub Actions 回归标准构建交付**
+   * **决策**：GitHub Actions 回归专业 CI/CD 职责——代码提交触发单测 (`mvn test`)、打包 Fat JAR、构建多架构 Docker 镜像推送至容器镜像仓库，并触发 ArgoCD 自动滚动更新 NUC 集群。
+
+4. **机密与凭证隔离：集中收敛于内网单一真理源**
+   * **决策**：Gmail 专用密码与 Cloudflare R2 S3 凭据由 K8s Secret 注入 Pod 内存，内网配置全量收敛于私有资产真理源 `cloud_accounts_and_spaces.md`。
 
 ---
 
 ## 🗂️ 文档与目录导引
 
 * 详细架构设计规格书：[`docs/architecture.md`](docs/architecture.md)
-* GitHub Actions Cron 部署与运维指南：[`docs/deployment.md`](docs/deployment.md)
-* 标准 PostgreSQL / CockroachDB DDL 规范：[`docs/schema.sql`](docs/schema.sql)
+* ArgoCD GitOps 与 NUC 部署运维指南：[`docs/deployment.md`](docs/deployment.md)
+* Apache Iceberg / Trino DDL 规范与查询参考：[`docs/schema.sql`](docs/schema.sql)
