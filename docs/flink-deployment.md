@@ -19,12 +19,16 @@
                 ▼
   [ Alice 专属 Gmail 邮箱 (alice.h.y.he@gmail.com) ]
                 │
-                │ 每 4 小时定时检索 (IMAP over TLS: 993)
+  ┌─────────────┴─────────────────────────────────────────────────────────────┐
+  │ ⏰ 触发机制: AWS EventBridge Scheduler (Asia/Shanghai) ➔ GitHub Actions   │
+  │              ➔ NUC Webhook 唤醒 Flink 批处理 Job (15 秒即焚)               │
+  └─────────────┬─────────────────────────────────────────────────────────────┘
+                │ 定时检索 (IMAP over TLS: 993)
                 ▼
 +─────────────────────────────────────────────────────────────────────────────+
 |  本地 Intel NUC (`Nova` · Worker 节点 · tencent-dp1-cluster)                  |
 |                                                                             |
-|  [ K3s CronJob: flink-sms-batch-etl ] (Namespace: default)                  |
+|  [ K3s CronJob/Job: flink-sms-batch-etl ] (Namespace: default)              |
 |  - 基础镜像: eclipse-temurin:21-jre-jammy (JDK 21 运行时)                    |
 |  - 算力限制: Requests 500m/1Gi · Limits 2000m/2Gi (JVM 堆 -Xmx1536m)        |
 |  - 算子流水:                                                                |

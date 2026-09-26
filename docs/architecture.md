@@ -8,11 +8,12 @@
 
 * **业务定位**：构建个人高可靠财务动账数据湖仓 (Lakehouse) 管道，将银行交易（广发信用卡 95508）、微信支付及支付宝动账凭证汇聚入统一开放的 Parquet / Iceberg 表格中。
 * **数据流向**：
-  `手机端 (SmsForwarder) ➔ 163 邮箱 SMTP ➔ Alice Gmail ➔ NUC K3s Flink (ArgoCD) ➔ Cloudflare R2 (Iceberg) ➔ NUC K3s Trino (ArgoCD)`
+  `手机端 (SmsForwarder) ➔ 163 邮箱 SMTP ➔ Alice Gmail ➔ AWS EventBridge Scheduler (定时吹哨) ➔ GitHub Actions Workflow (调度中枢) ➔ NUC K3s Flink (批处理入湖) ➔ Cloudflare R2 (Iceberg) ➔ NUC K3s Trino (查询分析)`
 * **核心原则**：
   1. **现代湖仓一体 (Lakehouse First)**：对标汇丰金融级数据湖仓演进哲学，全面拥抱开放标准，杜绝闭源专有格式与厂商锁定；
   2. **双引擎本地统一治理 (Double Engine Hub)**：本地 NUC 节点作为专属计算中心，通过 **ArgoCD GitOps** 统一纳管 **Flink (计算清洗)** 与 **Trino (交互查询)** 双引擎；
-  3. **数据不可变性与审计可追溯**：基于 Iceberg 快照隔离机制，保留完整短信原文，支持毫秒级时间旅行 (Time Travel) 历史切片回溯。
+  3. **三级弹性调度闭环 (Zero-Cost Serverless Trigger)**：借助 AWS EventBridge Scheduler 与 GitHub Actions 官方 API 实现云端吹哨与状态监控，本地 Flink 无需任何常驻监听服务，算完即焚；
+  4. **数据不可变性与审计可追溯**：基于 Iceberg 快照隔离机制，保留完整短信原文，支持毫秒级时间旅行 (Time Travel) 历史切片回溯。
 
 ---
 
@@ -53,12 +54,24 @@
   3. **标准 ANSI SQL 与 Web UI**：内置精美 Web Dashboard 监控 (`10.0.1.113:8080`)；支持 DBeaver、Python 以及集成 Kong Ingress (`trino.jppwl.asia` 带权威免费 SSL) 进行随时随地查账；
   4. **元数据下推与高效剪枝**：Trino 借助 Iceberg Manifest 直接完成分区裁剪与 Min/Max 过滤，毫秒级响应。
 
-### ADR-005: 持续交付体系——GitHub Actions CI + ArgoCD GitOps CD
+### ADR-005: 触发与调度链路锁定 AWS EventBridge Scheduler ➔ GitHub Actions ➔ NUC Flink
+* **背景评估**：
+  * 若完全依赖本地 NUC 系统时钟自调度，一旦家庭网络临时断网、关机或宿主机时钟漂移，可能发生定时漏跑；
+  * 若在本地常驻一个 HTTP 服务专门监听外部调度，又会违背 Flink 零常驻的精简初衷。
+* **决策**：建立 **三级弹性调度闭环体系**：
+  1. **云端定时吹哨人 (AWS EventBridge Scheduler)**：在 AWS 新加坡机房配置原生支持 `Asia/Shanghai` 的定时调度任务（`cron(0 0,4,8,12,16,20 * * ? *)`），享有每月 **1400 万次永久免费** 配额，到点自动向 GitHub 官方 API 发起 dispatch 请求；
+  2. **调度编排中枢 (GitHub Actions Workflow)**：接收 GitHub 官方的 `workflow_dispatch` 事件，执行环境预检与监控记录，随后向本地 NUC 发送批处理唤醒信号；
+  3. **批计算执行端 (NUC K3s Flink)**：本地 K3s 动态拉起批处理 Job，运行 10~20 秒将增量短信规整并写入 Cloudflare R2，完成后优雅退出并 100% 释放内存。
+* **架构收益**：
+  * **完全零本地常驻监听负担**：无需在 NUC 长期常驻任何 Web 监听进程，由 GitHub 价值数亿美元的全球云基础设施替我们 7x24 小时守候；
+  * **开箱即用可视化日志与告警**：每一次定时触发在 GitHub 界面上均有完整的执行历史图表与失败邮件告警。
+
+### ADR-006: 持续交付体系——GitHub Actions CI + ArgoCD GitOps CD
 * **决策**：明确划分 CI 与 CD 的职责边界：
   * **GitHub Actions (CI)**：代码推送触发自动化单测 (`mvn test`)、打包 Fat JAR、构建 Docker 容器镜像并推送到镜像仓库；
   * **ArgoCD (CD)**：自动检测镜像或 GitOps 清单变更，将 Flink 作业与 Trino 服务滚动更新至 NUC 集群。
 
-### ADR-006: 凭证与机密隔离标准 (K8s Secret & 单一真理源)
+### ADR-007: 凭证与机密隔离标准 (K8s Secret & 单一真理源)
 * **决策**：虽代码库公开透明，但任何生产凭证严禁硬编码。
 * **注入规范**：
   * `GMAIL_IMAP_USER`、`GMAIL_IMAP_PASS`（Alice Gmail 应用授权码）

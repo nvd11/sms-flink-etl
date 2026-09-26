@@ -35,11 +35,85 @@
 
 ---
 
-## 2. Flink on NUC 部署规格 (ArgoCD GitOps)
+## 2. 三级触发与调度全链路配置 (AWS Scheduler ➔ GitHub Actions ➔ NUC Flink)
+
+为了确保调度绝对准时、杜绝本地时钟漂移、且完全免除在 NUC 上常驻任何外部监听服务的负担，系统采用 **云端吹哨 ➔ GitHub 编排 ➔ NUC 落地** 的三级弹性调度体系：
+
+```text
+ ┌────────────────────────────────────────────────────────┐
+ │ 1. 云端定时吹哨人: AWS EventBridge Scheduler           │
+ │ - 区域: ap-southeast-1 (新加坡机房 · 终身 1400万次免费) │
+ │ - 规则: cron(0 0,4,8,12,16,20 * * ? *) · Asia/Shanghai │
+ │ - 动作: 到点调用 GitHub 官方 API 触发 workflow_dispatch│
+ └───────────────────────────┬────────────────────────────┘
+                             │ HTTPS POST /dispatches
+                             ▼
+ ┌────────────────────────────────────────────────────────┐
+ │ 2. 调度编排中枢: GitHub Actions Workflow               │
+ │ - 宿主: GitHub 官方托管服务器 (7x24 免费公网监听)       │
+ │ - 工作流: .github/workflows/trigger-nuc-etl.yml        │
+ │ - 动作: 执行运行前预检，向本地 NUC 发送批处理唤醒指令  │
+ └───────────────────────────┬────────────────────────────┘
+                             │ 唤醒指令 (Webhook over TLS)
+                             ▼
+ ┌────────────────────────────────────────────────────────┐
+ │ 3. 批计算执行端: 本地 Intel NUC (K3s Flink Pod)        │
+ │ - 调度: 动态创建 Job/Pod，运行 15 秒拉取入湖并退出      │
+ │ - 内存: 算完即归还 100% 内存，真正做到 0 常驻占用      │
+ └────────────────────────────────────────────────────────┘
+```
+
+### 2.1 AWS EventBridge Scheduler 触发配置规范
+* **调度器名称**: `test-sms-flink-cron` (ARN: `arn:aws:scheduler:ap-southeast-1:186004631963:schedule/default/test-sms-flink-cron`)
+* **时区**: `Asia/Shanghai`（原生北京时间）
+* **触发目标 (Target)**: 调用 GitHub 官方工作流触发 API
+  * **目标 URL**: `https://api.github.com/repos/nvd11/sms-flink-etl/actions/workflows/trigger-nuc-etl.yml/dispatches`
+  * **HTTP Method**: `POST`
+  * **Headers**:
+    * `Accept: application/vnd.github+json`
+    * `Authorization: Bearer <GITHUB_PAT>`
+  * **Payload Body**:
+    ```json
+    {
+      "ref": "main"
+    }
+    ```
+
+### 2.2 GitHub Actions 调度中枢工作流 (`.github/workflows/trigger-nuc-etl.yml`)
+```yaml
+name: SMS Flink Batch Orchestration Runner
+
+on:
+  workflow_dispatch: # 🎯 由 AWS EventBridge Scheduler 远程调用触发，亦支持网页一键手动补跑
+  schedule:
+    - cron: '0 */4 * * *' # 🎯 GitHub 自带 Cron 容灾备用兜底
+
+jobs:
+  dispatch-to-nuc:
+    name: Dispatch Batch Trigger to NUC K3s
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger NUC K3s Flink Batch Execution
+        env:
+          NUC_WEBHOOK_URL: ${{ secrets.NUC_WEBHOOK_URL }}
+          NUC_WEBHOOK_TOKEN: ${{ secrets.NUC_WEBHOOK_TOKEN }}
+        run: |
+          echo "Sending execution trigger signal to NUC K3s..."
+          curl -s -X POST "$NUC_WEBHOOK_URL" \
+            -H "Authorization: Bearer $NUC_WEBHOOK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"action": "trigger-batch", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'
+          echo "Trigger signal acknowledged!"
+```
+
+---
+
+## 3. Flink on NUC 部署规格 (ArgoCD GitOps)
 
 在 `my-argocd-manifests` 仓库中声明 Flink 部署清单（支持 K3s CronJob 或 Flink Session 批作业）：
 
-### 2.1 K3s CronJob 调度规格 (`infrastructure/flink-sms-etl/cronjob.yaml`)
+### 3.1 K3s CronJob 调度规格 (`infrastructure/flink-sms-etl/cronjob.yaml`)
 
 ```yaml
 apiVersion: batch/v1
@@ -86,11 +160,11 @@ spec:
 
 ---
 
-## 3. Trino on NUC 部署规格 (ArgoCD GitOps)
+## 4. Trino on NUC 部署规格 (ArgoCD GitOps)
 
 Trino 作为湖仓计算控制面，部署为常驻服务，提供 Web UI 与 JDBC 端口。
 
-### 3.1 Trino Iceberg Catalog 配置 (`infrastructure/trino/catalog-iceberg-cm.yaml`)
+### 4.1 Trino Iceberg Catalog 配置 (`infrastructure/trino/catalog-iceberg-cm.yaml`)
 
 ```yaml
 apiVersion: v1
@@ -112,7 +186,7 @@ data:
     s3.region=auto
 ```
 
-### 3.2 Trino 访问与交互方式
+### 4.2 Trino 访问与交互方式
 1. **Web UI 面板**：浏览器直接打开 `http://10.0.1.113:8080`（实时查看查询计划、Worker 状态与资源消耗）；
 2. **Kong Ingress 公网安全访问**：通过 `https://trino.jppwl.asia`（带 Cloudflare SSL 保护与 SSO 鉴权）；
 3. **客户端直接连线 (DBeaver / Python / DataGrip)**：
@@ -121,7 +195,7 @@ data:
 
 ---
 
-## 4. 机密与凭证清单 (K8s Secret)
+## 5. 机密与凭证清单 (K8s Secret)
 
 在 NUC 所在 K3s 集群中创建统一机密对象 `sms-lakehouse-secrets`：
 
@@ -139,7 +213,7 @@ kubectl create secret generic sms-lakehouse-secrets \
 
 ---
 
-## 5. 持续交付 CI/CD 流水线 (`.github/workflows/ci.yml`)
+## 6. 持续交付 CI/CD 流水线 (`.github/workflows/ci.yml`)
 
 GitHub Actions 承担标准持续集成职责：
 
