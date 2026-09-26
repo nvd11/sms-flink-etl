@@ -63,6 +63,8 @@ jobs:
 
           echo "$LOGS"
 
-          # 6. 优雅清理已完成的 Job 对象
+          # 6. 保留 10 秒缓冲时间确保 Fluent Bit 采集流完整推送到 VictoriaLogs
+          echo "⏳ Waiting 10s buffer for Fluent Bit log ingestion pipeline..."
+          sleep 10
           ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl delete job ${JOB_NAME} -n batch-jobs --ignore-not-found"
           echo "🧹 Cleanup completed. NUC memory 100% returned."
