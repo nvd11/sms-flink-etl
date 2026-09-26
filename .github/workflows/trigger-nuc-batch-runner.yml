@@ -49,9 +49,9 @@ jobs:
           fi
           echo "✅ Job dispatched to K3s successfully!"
 
-          # 4. 轮询等待 Job 执行完成并打印日志 (最多等待 45 秒)
+          # 4. 轮询等待 Job 执行完成并打印日志 (等待拉取与计算，最多 120 秒)
           echo "⏳ Waiting for batch execution to complete on NUC..."
-          ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=45s job/${JOB_NAME} -n batch-jobs"
+          ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=120s job/${JOB_NAME} -n batch-jobs"
 
           # 5. 获取 Pod 输出日志并记录到 Summary
           LOGS=$(ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
