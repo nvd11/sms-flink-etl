@@ -93,10 +93,16 @@ task.concurrency=4
 ### 3.4 Cloudflare R2 Iceberg Catalog (`etc/catalog/iceberg.properties`)
 ```properties
 connector.name=iceberg
-iceberg.file-format=PARQUET
+iceberg.catalog.type=jdbc
+iceberg.jdbc-catalog.catalog-name=finance
+iceberg.jdbc-catalog.driver-class=org.postgresql.Driver
+iceberg.jdbc-catalog.connection-url=jdbc:postgresql://brief-titan-32937.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/finance-db?sslmode=require
+iceberg.jdbc-catalog.connection-user=finance_user
+iceberg.jdbc-catalog.connection-password=qqMHLcNdtzrNB1hh
+iceberg.jdbc-catalog.default-warehouse-dir=s3://sms-flink-etl/iceberg/warehouse
 
 # S3 协议与 Cloudflare R2 兼容性设置
-fs.native-s3.enabled=true
+fs.s3.enabled=true
 s3.endpoint=https://8ac25a3a0ac482af1dbd6c65e118693e.r2.cloudflarestorage.com
 s3.path-style-access=true
 s3.region=auto
@@ -180,16 +186,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: trino-service
-  namespace: default
+  name: trino
+  namespace: trino
   labels:
     app: trino
 spec:
-  type: ClusterIP
+  type: NodePort
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+      nodePort: 30880 # 🎯 局域网访问使用 30880 (避免与宿主机 Kodi 8080 冲突)
   selector:
     app: trino
 ```
