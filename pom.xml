@@ -27,6 +27,7 @@
         <jakarta.mail.version>2.0.1</jakarta.mail.version>
         <slf4j.version>2.0.13</slf4j.version>
         <log4j.version>2.23.1</log4j.version>
+        <main.class>com.finance.etl.SmsGmailR2Job</main.class>
     </properties>
 
     <dependencies>
@@ -156,7 +157,7 @@
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>com.finance.etl.HelloWorldJob</mainClass>
+                                    <mainClass>${main.class}</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
