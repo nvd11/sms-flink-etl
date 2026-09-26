@@ -1,0 +1,69 @@
+name: Trigger NUC Batch Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Override Docker image (leave empty for default baseline image)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-batch-job:
+    name: Dispatch Ephemeral Batch Job to NUC
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Setup SSH Key & Execute Batch Job on K3s
+        env:
+          SSH_HOST: ${{ secrets.K3S_SSH_HOST }}
+          SSH_USER: ${{ secrets.K3S_SSH_USER }}
+          SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
+          OVERRIDE_IMAGE: ${{ inputs.image }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # 1. 建立临时 SSH 密钥环境
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          JOB_NAME="nuc-run-${RUN_ID}"
+          echo "🚀 Preparing dispatch for Job: ${JOB_NAME}"
+
+          # 2. 组装远程执行命令
+          if [ -n "$OVERRIDE_IMAGE" ]; then
+            echo "🎯 Overriding default image with: ${OVERRIDE_IMAGE}"
+            REMOTE_CMD="sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json | jq --arg img '${OVERRIDE_IMAGE}' '.spec.template.spec.containers[0].image = \$img' | sudo kubectl apply -f -"
+          else
+            echo "🎯 Using default baseline image defined in CronJob template"
+            REMOTE_CMD="sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
+          fi
+
+          # 3. 远程执行拉起命令
+          ssh "${SSH_USER}@${SSH_HOST}" "$REMOTE_CMD"
+          echo "✅ Job dispatched to K3s successfully!"
+
+          # 4. 轮询等待 Job 执行完成并打印日志 (最多等待 45 秒)
+          echo "⏳ Waiting for batch execution to complete on NUC..."
+          ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=45s job/${JOB_NAME} -n batch-jobs"
+
+          # 5. 获取 Pod 输出日志并记录到 Summary
+          LOGS=$(ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
+          
+          echo "### 📊 Batch Execution Logs on NUC Nova" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          echo "$LOGS" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$LOGS"
+
+          # 6. 优雅清理已完成的 Job 对象
+          ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl delete job ${JOB_NAME} -n batch-jobs --ignore-not-found"
+          echo "🧹 Cleanup completed. NUC memory 100% returned."
