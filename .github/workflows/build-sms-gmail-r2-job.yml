@@ -30,7 +30,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build Fat JAR with Maven (Target: SmsGmailR2Job)
+      - name: Build Fat JAR with Maven
         run: mvn clean package -DskipTests -Dmain.class=com.finance.etl.SmsGmailR2Job
 
       - name: Set up Docker Buildx
