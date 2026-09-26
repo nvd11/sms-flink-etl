@@ -37,17 +37,16 @@ jobs:
           JOB_NAME="nuc-run-${RUN_ID}"
           echo "🚀 Preparing dispatch for Job: ${JOB_NAME}"
 
-          # 2. 组装远程执行命令
+          # 2. 组装并执行拉起命令
           if [ -n "$OVERRIDE_IMAGE" ]; then
             echo "🎯 Overriding default image with: ${OVERRIDE_IMAGE}"
-            REMOTE_CMD="sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json | jq --arg img '${OVERRIDE_IMAGE}' '.spec.template.spec.containers[0].image = \$img' | sudo kubectl apply -f -"
+            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
+              | jq --arg img "${OVERRIDE_IMAGE}" '.spec.template.spec.containers[0].image = $img' \
+              | ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl apply -f -"
           else
             echo "🎯 Using default baseline image defined in CronJob template"
-            REMOTE_CMD="sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
+            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
           fi
-
-          # 3. 远程执行拉起命令
-          ssh "${SSH_USER}@${SSH_HOST}" "$REMOTE_CMD"
           echo "✅ Job dispatched to K3s successfully!"
 
           # 4. 轮询等待 Job 执行完成并打印日志 (最多等待 45 秒)
