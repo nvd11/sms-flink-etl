@@ -10,6 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV TZ=Asia/Shanghai
 
+# 关联开源 GitHub 仓库
+LABEL org.opencontainers.image.source="https://github.com/nvd11/sms-flink-etl"
+LABEL org.opencontainers.image.description="SMS Flink ETL Lightweight Lakehouse Pipeline"
+LABEL org.opencontainers.image.licenses="MIT"
+
 # 复制由 CI 编译生成的 Fat JAR
 COPY target/sms-flink-etl-1.0.0.jar /app/sms-flink-etl-1.0.0.jar
 
