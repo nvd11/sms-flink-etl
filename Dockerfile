@@ -12,7 +12,7 @@ ENV TZ=Asia/Shanghai
 
 # 关联开源 GitHub 仓库
 LABEL org.opencontainers.image.source="https://github.com/nvd11/sms-flink-etl"
-LABEL org.opencontainers.image.description="SMS Flink ETL Lightweight Lakehouse Pipeline"
+LABEL org.opencontainers.image.description="HelloWorld Flink Batch Job Image for Cluster Health Checks"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # 复制由 CI 编译生成的 Fat JAR

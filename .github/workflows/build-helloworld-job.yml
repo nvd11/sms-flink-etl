@@ -1,8 +1,14 @@
-name: SMS Flink Lakehouse CI Pipeline
+name: Build and Push HelloWorld Job Image
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - "src/main/java/com/finance/etl/HelloWorldJob.java"
+      - "src/main/resources/**"
+      - "pom.xml"
+      - "Dockerfile"
+      - ".github/workflows/build-helloworld-job.yml"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +17,7 @@ permissions:
 
 jobs:
   build-and-push:
+    name: Build & Push HelloWorld Job Image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -40,7 +47,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/nvd11/sms-flink-batch-etl
+          images: ghcr.io/nvd11/helloworld-job
           tags: |
             type=raw,value=latest
             type=sha,format=long
