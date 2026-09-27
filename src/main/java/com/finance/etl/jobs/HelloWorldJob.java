@@ -1,4 +1,4 @@
-package com.finance.etl;
+package com.finance.etl.jobs;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -10,7 +10,7 @@ import java.time.Instant;
 import java.util.Arrays;
 
 /**
- * SMS Flink ETL - 冒烟测试与探活 Hello World 批流作业
+ * SMS Flink ETL - 冒烟测试与探活 Hello World 批流作业 (包: com.finance.etl.jobs)
  */
 public class HelloWorldJob {
     private static final Logger LOG = LoggerFactory.getLogger(HelloWorldJob.class);
@@ -28,7 +28,7 @@ public class HelloWorldJob {
         env.setParallelism(2);
 
         // 3. 构建模拟动账探活测试数据源
-        DataStream<String> sampleStream = env.fromCollection(Arrays.asList(
+        DataStream<String> sampleStream = env.fromData(Arrays.asList(
             "Hello Boss Jason! Flink 1.19 is running gracefully on NUC Nova (10.0.1.113)!",
             "Cindy reporting: Financial Lakehouse ODS pipeline is ready to rumble.",
             "Verified Stack: AWS Scheduler -> GitHub Actions -> NUC Flink -> Cloudflare R2 Iceberg -> Trino.",

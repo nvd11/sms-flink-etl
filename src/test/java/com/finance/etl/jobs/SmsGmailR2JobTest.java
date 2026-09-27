@@ -1,4 +1,4 @@
-package com.finance.etl;
+package com.finance.etl.jobs;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,7 +11,7 @@ import java.io.PrintStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 专门针对 SmsGmailR2Job 主作业的 HelloWorld 冒烟与执行验证单测
+ * 针对 jobs 包下的 SmsGmailR2Job 主作业端到端执行测试
  */
 public class SmsGmailR2JobTest {
     private static final Logger LOG = LoggerFactory.getLogger(SmsGmailR2JobTest.class);
@@ -23,7 +23,6 @@ public class SmsGmailR2JobTest {
         LOG.info("🧪 [SmsGmailR2JobTest] Starting Local Smoke Test for SmsGmailR2Job...");
         LOG.info("================================================================================");
 
-        // 重定向 System.out 捕获 .print() 的输出内容
         PrintStream originalOut = System.out;
         ByteArrayOutputStream capturedOut = new ByteArrayOutputStream();
         System.setOut(new PrintStream(capturedOut));
@@ -32,7 +31,6 @@ public class SmsGmailR2JobTest {
         try {
             LOG.info("▶️ Invoking SmsGmailR2Job.main(String[] args)...");
 
-            // 执行 SmsGmailR2Job 主入口
             assertDoesNotThrow(() -> {
                 SmsGmailR2Job.main(new String[]{});
             }, "SmsGmailR2Job.main() 在本地执行时不应抛出任何异常");
@@ -40,14 +38,12 @@ public class SmsGmailR2JobTest {
             consoleOutput = capturedOut.toString();
 
         } finally {
-            // 无论测试成功与否，立即恢复标准 System.out，保证后续 Logger 输出正常打印到终端
             System.setOut(originalOut);
         }
 
         LOG.info("✅ SmsGmailR2Job.main() executed cleanly without exceptions.");
         LOG.info("🔍 Captured console output length: {} characters", consoleOutput.length());
 
-        // 验证核心标识与业务内容是否都被 Flink 算子成功处理并打印
         assertNotNull(consoleOutput, "控制台输出不应为空");
         assertTrue(consoleOutput.contains("SmsRecord"), "输出中必须包含 SmsRecord 实体输出");
         LOG.info("  ✓ Verified presence of SmsRecord stream entities");

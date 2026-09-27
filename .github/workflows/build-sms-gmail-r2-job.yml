@@ -4,7 +4,12 @@ on:
   push:
     branches: [ main ]
     paths:
-      - "src/main/java/com/finance/etl/SmsGmailR2Job.java"
+      - "src/main/java/com/finance/etl/jobs/SmsGmailR2Job.java"
+      - "src/main/java/com/finance/etl/pipeline/**"
+      - "src/main/java/com/finance/etl/reader/**"
+      - "src/main/java/com/finance/etl/transform/**"
+      - "src/main/java/com/finance/etl/model/**"
+      - "src/main/java/com/finance/etl/util/**"
       - "src/main/resources/**"
       - "pom.xml"
       - "Dockerfile"
@@ -31,7 +36,7 @@ jobs:
           cache: 'maven'
 
       - name: Build Fat JAR with Maven
-        run: mvn clean package -DskipTests -Dmain.class=com.finance.etl.SmsGmailR2Job
+        run: mvn clean package -DskipTests -Dmain.class=com.finance.etl.jobs.SmsGmailR2Job
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

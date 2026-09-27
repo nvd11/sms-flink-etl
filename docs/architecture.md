@@ -122,7 +122,63 @@
 
 ---
 
-## 4. 表结构 Schema 规范与分区策略
+## 4. 代码工程结构与模块化设计规范 (Clean Layering: Pipeline vs Jobs)
+
+为了彻底杜绝面向过程脚本式写法、避免静态函数泛滥，同时防止多作业场景下包层级过深或职责混淆，系统采用清晰严谨的分层架构设计：**将“执行入口驱动层 (Jobs)”与“流图拓扑编排层 (Pipeline)”彻底分包隔离**，平铺收敛于 `com.finance.etl` 根命名空间下。
+
+### 4.1 包结构拓扑 (Package Topology)
+
+```text
+com.finance.etl
+│
+├── jobs                <-- [执行入口驱动层] 纯粹的 Application/Job Launcher (main 入口)
+│   ├── HelloWorldJob.java        # 探活与基线冒烟测试驱动器
+│   └── SmsGmailR2Job.java        # 动账批处理入湖驱动器 (环境配置、依赖组装与触发)
+│
+├── pipeline            <-- [计算拓扑编排层] 纯粹的 Flink DAG 算子装配与数据流编排
+│   └── SmsGmailR2Pipeline.java   # 实体对象：协调采集、规整并组装 DataStream 拓扑
+│
+├── reader              <-- [数据接入层 / Source] 纯协议通信与外部数据抓取
+│   └── GmailImapReader.java      # 实体对象：Jakarta Mail IMAP 短连接拉取与邮件脱壳
+│
+├── transform           <-- [业务清洗层 / Transform] 业务规则、实体映射与防重指纹
+│   ├── SmsRecordParser.java      # 实体对象：邮件元数据解析与动账凭证提炼
+│   └── RawRecordFormatter.java   # 辅助算子：字符串规整与历史兼容算子
+│
+├── sink                <-- [湖仓存储层 / Sink] 开放表格与对象存储直连
+│   └── IcebergR2SinkBuilder.java # 实体对象：Cloudflare R2 Iceberg 表构造器
+│
+├── model               <-- [领域模型层] 核心 DTO 与 Lakehouse ODS 物理表模型
+│   ├── RawEmail.java             # 邮件协议原始 DTO
+│   └── SmsRecord.java            # 湖仓 ODS 物理表实体模型
+│
+└── util                <-- [通用基础设施层] 辅助工具与配置解析
+    └── ConfigUtils.java          # 环境变量与配置加载器 (.env / OS ENV)
+```
+
+### 4.2 层次与面向对象职责分工矩阵
+
+| 层次 / 包名 | 代表类名 | 角色与类型 | 核心职责 | 依赖与可测试性 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`jobs`** | `SmsGmailR2Job` | 作业驱动入口 (Main Driver) | 负责命令行参数解析、Flink 执行环境初始化（BATCH 模式、并发度）、通过工厂实例化组件并调用 `env.execute()`。 | 极简，无任何静态业务实现，专注于应用生命周期控制。 |
+| **`pipeline`** | `SmsGmailR2Pipeline` | 计算拓扑编排器 (DAG Orchestrator) | 持有 `reader`、`transform` 及 `sink` 实例，负责组装 Flink `DataStream` 算子拓扑、空数据心跳保活及异常兜底。 | 高内聚，脱离静态入口，天然支持在测试中注入 Mock 组件执行拓扑验证。 |
+| **`reader`** | `GmailImapReader` | 协议通信实体 (Data Source) | 负责通过 IMAP over SSL 与 Gmail 通信、SOCKS5 代理挂载、拉取 `UNSEEN` 邮件并解析为纯文本 `RawEmail`。 | 纯 Java 实现，不依赖 Flink 运行时，支持纯 POJO 单元测试。 |
+| **`transform`** | `SmsRecordParser` | 业务解析实体 (Domain Transformer) | 从 `RawEmail` 识别发件渠道（广发 95508、微信支付、支付宝等）、提取卡槽标识、计算 SHA-256 防重指纹。 | 纯业务逻辑，实现 `Serializable`，可直接作为 Flink 函数算子复用。 |
+| **`sink`** | `IcebergR2SinkBuilder`| 湖仓存储构造器 (Lakehouse Sink) | 封装 Cloudflare R2 S3A 认证参数、Hadoop / REST Catalog 以及 Iceberg Batch Append-Only 表追加逻辑。 | 隔离复杂的 Iceberg 底层配置与 S3 属性注入。 |
+
+### 4.3 架构收益与工程红利
+1. **平铺整洁，杜绝过度分包**：
+   - 彻底废除 `hello`、`smsgmail` 等散碎的子包结构，业务按功能平铺直叙，全局视野极为规整干净。
+2. **`jobs` 与 `pipeline` 解耦的专业范式**：
+   - 作业入口（`jobs`）保持绝对轻量，纯粹负责依赖注入（DI）和任务分发；
+   - 拓扑编排（`pipeline`）成为一等公民对象，未来无论由 CLI 触发、测试套件调用还是外部 API 驱动，均可无缝复用。
+3. **CI/CD 构建粒度清晰**：
+   - `build-helloworld-job.yml` 关注 `jobs/HelloWorldJob.java`；
+   - `build-sms-gmail-r2-job.yml` 关注 `jobs/SmsGmailR2Job.java`、`pipeline/**`、`reader/**` 等核心业务包。
+
+---
+
+## 5. 表结构 Schema 规范与分区策略
 
 * **表规范**：`iceberg.finance.raw_sms_records`
 * **分区策略**：采用 Iceberg 隐藏分区（Hidden Partitioning）特性，按接收月份分区 `month(received_at)`，兼顾文件紧凑度与查询剪枝效率；

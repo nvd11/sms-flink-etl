@@ -66,7 +66,7 @@ public class SmsPipelineTest {
             "【支付宝】花呗自动扣款通知：扣款成功299.00元。"
         );
 
-        DataStream<String> inputStream = env.fromCollection(rawMessages);
+        DataStream<String> inputStream = env.fromData(rawMessages);
 
         // 3. 接入真正的业务规整算子
         DataStream<SmsRecord> recordStream = inputStream.map(new RawRecordFormatter());
