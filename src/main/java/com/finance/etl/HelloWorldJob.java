@@ -1,5 +1,6 @@
 package com.finance.etl;
 
+import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
@@ -19,8 +20,9 @@ public class HelloWorldJob {
         LOG.info("🚀 Starting SMS Flink ETL - Hello World Verification Job");
         LOG.info("==========================================================");
 
-        // 1. 初始化 Flink 流执行环境
+        // 1. 初始化 Flink 流执行环境并强制锁定为批处理运行模式
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setRuntimeMode(RuntimeExecutionMode.BATCH); // 🎯 显式切换为批处理运行模式
 
         // 2. 并发度设为 2 (完全匹配 NUC TaskManager 的 2 个 Task Slots)
         env.setParallelism(2);

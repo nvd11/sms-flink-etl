@@ -6,6 +6,7 @@ import com.finance.etl.util.ConfigUtils;
 import jakarta.mail.*;
 import jakarta.mail.internet.MimeMultipart;
 import jakarta.mail.search.FlagTerm;
+import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
@@ -33,8 +34,9 @@ public class SmsGmailR2Job {
         String user = ConfigUtils.get("GMAIL_IMAP_USER", "alice.h.y.he@gmail.com");
         LOG.info("📧 Configured Gmail IMAP Buffer Account: {}", user);
 
-        // 1. 初始化 Flink 批处理流执行环境
+        // 1. 初始化 Flink 执行环境并强制锁定为批处理运行模式 (纯批处理，算完即焚)
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setRuntimeMode(RuntimeExecutionMode.BATCH); // 🎯 核心铁律：显式声明为 BATCH 模式！
         env.setParallelism(2); // 匹配 NUC TaskManager 的 2 个并行 Slots
 
         // 2. 从 Gmail IMAP 拉取所有未读邮件并解析为 SMS 记录
