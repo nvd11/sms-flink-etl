@@ -122,35 +122,50 @@
 
 ---
 
-## 4. 代码工程结构与模块化设计规范 (Clean Layering: Pipeline vs Jobs)
+## 4. 代码工程结构与模块化设计规范 (Clean Layering & Multi-Job Extensibility)
 
-为了彻底杜绝面向过程脚本式写法、避免静态函数泛滥，同时防止多作业场景下包层级过深或职责混淆，系统采用清晰严谨的分层架构设计：**将“执行入口驱动层 (Jobs)”与“流图拓扑编排层 (Pipeline)”彻底分包隔离**，平铺收敛于 `com.finance.etl` 根命名空间下。
+为了彻底杜绝面向过程脚本式写法、避免静态函数泛滥，同时支撑未来多作业横向扩展（如增加**视频过期清理任务 VideoCleanupJob**、账单核对任务等），系统采用清晰严谨的分层架构设计：**将“执行入口驱动层 (jobs)”、“流图拓扑编排层 (pipeline)”、“协议/介质驱动层 (source)”及“存储落地层 (sink)”彻底解耦**。
 
-### 4.1 包结构拓扑 (Package Topology)
+### 4.1 包结构拓扑与多作业扩展蓝图 (Package Topology)
 
 ```text
 com.finance.etl
 │
 ├── jobs                <-- [执行入口驱动层] 纯粹的 Application/Job Launcher (main 入口)
 │   ├── HelloWorldJob.java        # 探活与基线冒烟测试驱动器
-│   └── SmsGmailR2Job.java        # 动账批处理入湖驱动器 (环境配置、依赖组装与触发)
+│   ├── SmsGmailR2Job.java        # 金融动账入湖作业入口
+│   └── VideoCleanupJob.java      # [未来扩展示例] 监控视频过期清理作业入口
 │
 ├── pipeline            <-- [计算拓扑编排层] 纯粹的 Flink DAG 算子装配与数据流编排
-│   └── SmsGmailR2Pipeline.java   # 实体对象：协调采集、规整并组装 DataStream 拓扑
+│   ├── SmsGmailR2Pipeline.java   # 协调 IMAP 采集、动账规整并组装 DataStream 拓扑
+│   └── VideoCleanupPipeline.java # [未来扩展示例] 编排视频元数据流与清理过滤拓扑
 │
-├── reader              <-- [数据接入层 / Source] 纯协议通信与外部数据抓取
-│   └── GmailImapReader.java      # 实体对象：Jakarta Mail IMAP 短连接拉取与邮件脱壳
+├── source              <-- [数据输入连接器层 / Source] 按协议/介质二级分包，遵循 FLIP-27 标准
+│   ├── imap                      # 邮件协议数据源 (给动账入湖 Job 使用)
+│   │   ├── ImapSource.java           # 顶层门面工厂 (实现 Source<RawEmail, ImapSplit, ...>)
+│   │   ├── ImapSourceReader.java     # Worker 读取工人 (实现 SourceReader)
+│   │   ├── ImapSplit.java            # 任务分片工单 (实现 SourceSplit)
+│   │   ├── ImapSplitEnumerator.java  # Master 调度总管 (实现 SplitEnumerator)
+│   │   └── ImapSplitSerializer.java  # 工单版本化编解码器
+│   │
+│   └── video / file              # [未来扩展示例] 视频/文件存储数据源 (给清理 Job 使用)
+│       ├── VideoFileSource.java      # 扫描 NAS / S3 / 本地磁盘视频元数据 Source
+│       ├── VideoFileSourceReader.java# 读取视频文件属性 (创建时间、时长、大小)
+│       └── VideoFileSplit.java       # 目录/文件块分片工单
 │
 ├── transform           <-- [业务清洗层 / Transform] 业务规则、实体映射与防重指纹
-│   ├── SmsRecordParser.java      # 实体对象：邮件元数据解析与动账凭证提炼
-│   └── RawRecordFormatter.java   # 辅助算子：字符串规整与历史兼容算子
+│   ├── SmsRecordParser.java      # 邮件元数据解析与动账凭证提炼
+│   ├── RawRecordFormatter.java   # 辅助算子：字符串规整与历史兼容算子
+│   └── VideoRetentionFilter.java # [未来扩展示例] 视频过期策略过滤算子 (如保留7天)
 │
-├── sink                <-- [湖仓存储层 / Sink] 开放表格与对象存储直连
-│   └── IcebergR2SinkBuilder.java # 实体对象：Cloudflare R2 Iceberg 表构造器
+├── sink                <-- [湖仓/落地存储层 / Sink] 开放表格与对象存储直连
+│   ├── IcebergR2SinkBuilder.java # Cloudflare R2 Iceberg 湖仓追加 Sink
+│   └── FileDeletionSink.java     # [未来扩展示例] 视频文件物理清理 / 冷归档 Sink
 │
 ├── model               <-- [领域模型层] 核心 DTO 与 Lakehouse ODS 物理表模型
 │   ├── RawEmail.java             # 邮件协议原始 DTO
-│   └── SmsRecord.java            # 湖仓 ODS 物理表实体模型
+│   ├── SmsRecord.java            # 湖仓 ODS 物理表实体模型
+│   └── VideoFileMeta.java        # [未来扩展示例] 视频文件元数据实体
 │
 └── util                <-- [通用基础设施层] 辅助工具与配置解析
     └── ConfigUtils.java          # 环境变量与配置加载器 (.env / OS ENV)
@@ -160,27 +175,33 @@ com.finance.etl
 
 | 层次 / 包名 | 代表类名 | 角色与类型 | 核心职责 | 依赖与可测试性 |
 | :--- | :--- | :--- | :--- | :--- |
-| **`jobs`** | `SmsGmailR2Job` | 作业驱动入口 (Main Driver) | 负责命令行参数解析、Flink 执行环境初始化（BATCH 模式、并发度）、通过工厂实例化组件并调用 `env.execute()`。 | 极简，无任何静态业务实现，专注于应用生命周期控制。 |
-| **`pipeline`** | `SmsGmailR2Pipeline` | 计算拓扑编排器 (DAG Orchestrator) | 持有 `reader`、`transform` 及 `sink` 实例，负责组装 Flink `DataStream` 算子拓扑、空数据心跳保活及异常兜底。 | 高内聚，脱离静态入口，天然支持在测试中注入 Mock 组件执行拓扑验证。 |
-| **`reader`** | `GmailImapReader` | 协议通信实体 (Data Source) | 负责通过 IMAP over SSL 与 Gmail 通信、SOCKS5 代理挂载、拉取 `UNSEEN` 邮件并解析为纯文本 `RawEmail`。 | 纯 Java 实现，不依赖 Flink 运行时，支持纯 POJO 单元测试。 |
-| **`transform`** | `SmsRecordParser` | 业务解析实体 (Domain Transformer) | 从 `RawEmail` 识别发件渠道（广发 95508、微信支付、支付宝等）、提取卡槽标识、计算 SHA-256 防重指纹。 | 纯业务逻辑，实现 `Serializable`，可直接作为 Flink 函数算子复用。 |
-| **`sink`** | `IcebergR2SinkBuilder`| 湖仓存储构造器 (Lakehouse Sink) | 封装 Cloudflare R2 S3A 认证参数、Hadoop / REST Catalog 以及 Iceberg Batch Append-Only 表追加逻辑。 | 隔离复杂的 Iceberg 底层配置与 S3 属性注入。 |
+| **`jobs`** | `SmsGmailR2Job`<br>`VideoCleanupJob` | 作业驱动入口 (Main Driver) | 负责命令行参数解析、Flink 执行环境初始化（BATCH 模式、并发度）、通过工厂实例化组件并调用 `env.execute()`。 | 极简，无任何静态业务实现，专注于应用生命周期控制。 |
+| **`pipeline`** | `SmsGmailR2Pipeline`<br>`VideoCleanupPipeline` | 计算拓扑编排器 (DAG Orchestrator) | 持有 `source`、`transform` 及 `sink` 实例，负责组装 Flink `DataStream` 算子拓扑、空数据心跳保活及异常兜底。 | 高内聚，脱离静态入口，天然支持在测试中注入 Mock 组件执行拓扑验证。 |
+| **`source`** | `source.imap.*`<br>`source.video.*` | 数据源连接器 (FLIP-27 Connector) | 按协议/介质独立子包。内部严格遵循 FLIP-27 规范，分离 `SplitEnumerator`（Master 调度）与 `SourceReader`（Worker 读取），通过 `SplitSerializer` 完成网络传输。 | 独立子包物理隔离，新增视频/文件等数据源对原有代码 0 侵入。 |
+| **`transform`** | `SmsRecordParser`<br>`VideoRetentionFilter` | 业务解析实体 (Domain Transformer) | 实现具体的业务清洗、正则解析、过期策略判断或模型转换。 | 纯业务逻辑，实现 `Serializable`，直接作为 Flink 函数算子复用。 |
+| **`sink`** | `IcebergR2SinkBuilder`<br>`FileDeletionSink` | 落地存储构造器 (Lakehouse / Action Sink) | 封装目标存储协议（Cloudflare R2 S3A 认证、Iceberg Commit）或物理动作（本地/远程文件删除）。 | 隔离复杂的外部存储认证与底层连接池配置。 |
 
-### 4.3 架构收益与工程红利
-1. **平铺整洁，杜绝过度分包**：
-   - 彻底废除 `hello`、`smsgmail` 等散碎的子包结构，业务按功能平铺直叙，全局视野极为规整干净。
-2. **`jobs` 与 `pipeline` 解耦的专业范式**：
-   - 作业入口（`jobs`）保持绝对轻量，纯粹负责依赖注入（DI）和任务分发；
-   - 拓扑编排（`pipeline`）成为一等公民对象，未来无论由 CLI 触发、测试套件调用还是外部 API 驱动，均可无缝复用。
+### 4.3 架构收益与多作业演进红利
+1. **开闭原则（OCP）终极落地**：
+   - 增加新业务（如视频清理、外币对账）时，只需在 `jobs` 增加入口、在 `pipeline` 增加编排、在 `source` 扩充对应协议子包，**旧业务代码零修改、零风险**。
+2. **连接器生态按“协议/介质”自收敛**：
+   - `source.imap` 只管邮件通信协议；
+   - `source.video` 只管文件目录与流媒体探测；
+   - 职责边界如刀刻般分明，彻底消除了包污染。
 3. **CI/CD 构建粒度清晰**：
    - `build-helloworld-job.yml` 关注 `jobs/HelloWorldJob.java`；
-   - `build-sms-gmail-r2-job.yml` 关注 `jobs/SmsGmailR2Job.java`、`pipeline/**`、`reader/**` 等核心业务包。
+   - `build-sms-gmail-r2-job.yml` 关注 `jobs/SmsGmailR2Job.java`、`source/imap/**`、`pipeline/SmsGmailR2Pipeline.java` 等关联模块。
 
 ---
 
-## 5. 表结构 Schema 规范与分区策略
+## 5. 表结构 Schema 规范与单表水位真理源 (Single Table Truth)
 
-* **表规范**：`iceberg.finance.raw_sms_records`
-* **分区策略**：采用 Iceberg 隐藏分区（Hidden Partitioning）特性，按接收月份分区 `month(received_at)`，兼顾文件紧凑度与查询剪枝效率；
-* **完整 Iceberg DDL 定义**：详见 [`docs/schema.sql`](schema.sql)；
+* **表规范**：`iceberg.finance.raw_sms_records`（完整 DDL 详见 [`scripts/schema.sql`](../scripts/schema.sql)）
+* **单表真理源架构 (Single Table Truth for Offset Cursor)**：
+  - 传统方案常引入外置元数据表记录批处理位点，易引发“主表写入成功但元表记录失败”的跨表分布式不一致；
+  - 本项目采用 **单表内生游标机制**：在主表中设计 `imap_uid BIGINT` 物理字段，由 Iceberg 快照机制保证数据与位点在同一个原子事务中提交。
+  - 下次批处理启动时，调度主管通过 `SELECT COALESCE(MAX(imap_uid), 0) FROM iceberg.finance.raw_sms_records WHERE channel = 'EMAIL_IMAP'` 秒级探查水位，配合 Lookback 窗口与 SHA-256 幂等指纹，100% 杜绝漏单与重单。
+* **分区与排序策略**：
+  - 采用 Iceberg 隐藏分区（Hidden Partitioning）特性，按接收月份分区 `month(received_at)`，兼顾文件紧凑度与查询剪枝效率；
+  - 采用文件内排序 `sorted_by = ARRAY['received_at']` 加速基于时间的过滤扫描；
 * **时间标准**：统一采用带时区微秒时间戳（`TIMESTAMP(6) WITH TIME ZONE`）。

@@ -3,6 +3,9 @@ package com.finance.etl.transform;
 import com.finance.etl.model.RawEmail;
 import com.finance.etl.model.SmsRecord;
 
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.util.Collector;
+
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,10 +18,18 @@ import java.util.UUID;
 /**
  * 动账短信脱壳与实体解析器 (SmsRecordParser)
  * 职责：从 RawEmail 邮件报文中识别发件渠道（广发95508、微信支付、支付宝、招行95555等），生成 SHA-256 幂等防重指纹，构建 SmsRecord ODS 实体。
- * 实现 Serializable 接口，方便作为 Flink 算子传递。
+ * 原生实现 Flink 的 FlatMapFunction<RawEmail, SmsRecord>，可直接作为 Flink 转换算子挂载。
  */
-public class SmsRecordParser implements Serializable {
+public class SmsRecordParser implements FlatMapFunction<RawEmail, SmsRecord>, Serializable {
     private static final long serialVersionUID = 1L;
+
+    @Override
+    public void flatMap(RawEmail email, Collector<SmsRecord> out) throws Exception {
+        List<SmsRecord> records = parse(email);
+        for (SmsRecord record : records) {
+            out.collect(record);
+        }
+    }
 
     /**
      * 将单封邮件解析为一条或多条 SmsRecord 记录
@@ -56,6 +67,7 @@ public class SmsRecordParser implements Serializable {
 
         SmsRecord record = new SmsRecord();
         record.setId(System.nanoTime());
+        record.setImapUid(email.getImapUid());
         record.setMsgUid(fingerprint);
         record.setChannel("EMAIL_IMAP");
         record.setSender(sender);

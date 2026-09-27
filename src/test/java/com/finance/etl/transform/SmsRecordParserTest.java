@@ -21,6 +21,7 @@ public class SmsRecordParserTest {
         SmsRecordParser parser = new SmsRecordParser();
 
         RawEmail email = new RawEmail();
+        email.setImapUid(1088L);
         email.setMessageId("<cgb-tx-9988@gmail.com>");
         email.setSubject("【广发银行】信用卡消费通知");
         email.setBody("您尾号3342信用卡27日12:36消费459.00人民币，交易商户:支付宝-安庆市大观区惠佳数码产品经营部。");
@@ -31,6 +32,7 @@ public class SmsRecordParserTest {
         assertEquals(1, records.size());
 
         SmsRecord r = records.get(0);
+        assertEquals(1088L, r.getImapUid(), "应正确映射邮件的 RFC 3501 IMAP UID");
         assertEquals("95508", r.getSender());
         assertEquals("EMAIL_IMAP", r.getChannel());
         assertEquals("SIM_SLOT_1", r.getReceiverPhone());

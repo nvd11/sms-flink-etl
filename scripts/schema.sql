@@ -11,12 +11,14 @@ WITH (location = 's3://sms-flink-etl/iceberg/finance');
 
 -- 2. 纯粹的 ODS 原始报文表 (Apache Iceberg 表格式 · Parquet 列式存储)
 -- 严格遵循经典数据湖仓规范与数仓分层，字段全覆盖、零业务派生冗余
+-- 采用“单表真理源 (Single Table Truth)”架构：内生 imap_uid 字段作为批处理任务的水位线游标
 CREATE TABLE IF NOT EXISTS iceberg.finance.raw_sms_records (
-    id              BIGINT,                              -- 全局自增或业务递增序列 ID
-    msg_uid         VARCHAR,                             -- 邮件 Message-ID 或全局唯一消息指纹 (防重业务唯一键)
+    id              BIGINT,                              -- 全局递增序列 ID
+    imap_uid        BIGINT,                              -- 🎯 RFC 3501 IMAP 永久递增 UID (断点续传/下次批处理的起始水位线游标)
+    msg_uid         VARCHAR,                             -- RFC 2822 Message-ID 或全局唯一消息指纹 (防重业务唯一键)
     channel         VARCHAR,                             -- 采集通道: 'EMAIL_IMAP'
-    sender          VARCHAR,                             -- 发送方原始号码: 95508, 106xxxx 等
-    receiver_phone  VARCHAR,                             -- 接收短信的本机手机号码 (区分双卡/多卡归属)
+    sender          VARCHAR,                             -- 发送方原始号码: 95508, WECHAT_PAY, ALIPAY 等
+    receiver_phone  VARCHAR,                             -- 接收短信的本机手机号码 / 卡槽标识 (SIM_SLOT_1, SIM_SLOT_2)
     received_at     TIMESTAMP(6) WITH TIME ZONE,         -- 原始短信到达物理时间 (带时区微秒戳)
     raw_body        VARCHAR,                             -- 原始短信全文报文 (100% 原始保真)
     created_at      TIMESTAMP(6) WITH TIME ZONE          -- 本系统入湖落地时间
@@ -59,7 +61,13 @@ WITH (
 -- FROM iceberg.finance."raw_sms_records$snapshots"
 -- ORDER BY committed_at DESC;
 
--- 4.4 下游 DWD 明细层消费 (在 Trino 中直接进行正则抽取与视图清洗)
+-- 4.4 批处理增量水位探查 (Lakehouse-Native Offset Discovery Query)
+-- 下次批处理启动时，以此作为起始水位游标拉取增量邮件：
+-- SELECT COALESCE(MAX(imap_uid), 0) AS last_offset_uid 
+-- FROM iceberg.finance.raw_sms_records 
+-- WHERE channel = 'EMAIL_IMAP';
+
+-- 4.5 下游 DWD 明细层消费 (在 Trino 中直接进行正则抽取与视图清洗)
 -- CREATE OR REPLACE VIEW iceberg.finance.v_dwd_transactions AS
 -- SELECT
 --     msg_uid,

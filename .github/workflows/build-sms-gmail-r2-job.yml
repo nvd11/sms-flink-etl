@@ -6,7 +6,7 @@ on:
     paths:
       - "src/main/java/com/finance/etl/jobs/SmsGmailR2Job.java"
       - "src/main/java/com/finance/etl/pipeline/**"
-      - "src/main/java/com/finance/etl/reader/**"
+      - "src/main/java/com/finance/etl/source/**"
       - "src/main/java/com/finance/etl/transform/**"
       - "src/main/java/com/finance/etl/model/**"
       - "src/main/java/com/finance/etl/util/**"

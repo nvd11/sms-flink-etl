@@ -1,0 +1,47 @@
+name: Sync Iceberg Schema via Trino
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "scripts/schema.sql"
+      - "scripts/execute-trino-sql.js"
+      - ".github/workflows/sync-iceberg-schema.yml"
+  workflow_dispatch:
+    inputs:
+      trino_url:
+        description: "Trino Endpoint URL"
+        required: false
+        default: "https://trino.jppwl.asia"
+
+permissions:
+  contents: read
+
+jobs:
+  sync-schema:
+    name: Apply Schema DDL to Cloudflare R2 Iceberg
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Execute Schema DDL on Trino
+        env:
+          TRINO_URL: ${{ github.event.inputs.trino_url || 'https://trino.jppwl.asia' }}
+          TRINO_USER: "github-actions-schema-sync"
+        run: |
+          echo "🌐 Connecting to Trino endpoint: ${TRINO_URL}..."
+          node scripts/execute-trino-sql.js scripts/schema.sql
+
+      - name: Verify Table Schema on Trino
+        env:
+          TRINO_URL: ${{ github.event.inputs.trino_url || 'https://trino.jppwl.asia' }}
+          TRINO_USER: "github-actions-schema-sync"
+        run: |
+          echo "🔍 Verifying latest schema of iceberg.finance.raw_sms_records..."
+          ./scripts/trino.sh "DESCRIBE iceberg.finance.raw_sms_records"

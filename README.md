@@ -95,4 +95,4 @@
 * 全自动化部署与运维指南：[`docs/deployment.md`](docs/deployment.md)
 * Trino on NUC 部署规格书：[`docs/trino-deployment.md`](docs/trino-deployment.md)
 * Flink on NUC 部署规格书：[`docs/flink-deployment.md`](docs/flink-deployment.md)
-* Apache Iceberg / Trino DDL 规范与查询参考：[`docs/schema.sql`](docs/schema.sql)
+* Apache Iceberg / Trino DDL 规范与查询参考：[`scripts/schema.sql`](scripts/schema.sql)

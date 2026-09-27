@@ -2,89 +2,61 @@ package com.finance.etl.pipeline;
 
 import com.finance.etl.model.RawEmail;
 import com.finance.etl.model.SmsRecord;
-import com.finance.etl.reader.GmailImapReader;
+import com.finance.etl.source.imap.ImapSource;
 import com.finance.etl.transform.SmsRecordParser;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.UUID;
-
 /**
  * 流水线执行实体对象 (SmsGmailR2Pipeline)
- * 职责：持有 GmailImapReader 与 SmsRecordParser 实例，负责协调邮件提取、短信规整并组装 Flink DataStream 算子拓扑。
+ * 职责：持有 ImapSource (FLIP-27 连接器) 与 SmsRecordParser 算子实例，
+ * 负责通过 Flink 官方正统 API 组装 DataStream 算子拓扑 (Source -> FlatMap -> Log/Sink)。
  */
 public class SmsGmailR2Pipeline {
     private static final Logger LOG = LoggerFactory.getLogger(SmsGmailR2Pipeline.class);
 
-    private final GmailImapReader reader;
+    private final ImapSource source;
     private final SmsRecordParser parser;
 
-    public SmsGmailR2Pipeline(GmailImapReader reader, SmsRecordParser parser) {
-        this.reader = reader;
+    public SmsGmailR2Pipeline(ImapSource source, SmsRecordParser parser) {
+        this.source = source;
         this.parser = parser;
     }
 
     /**
-     * 协调获取所有短信记录 (邮件提取 -> 业务脱壳)
-     */
-    public List<SmsRecord> extractAllSmsRecords() {
-        List<RawEmail> emails = reader.fetchEmails();
-        List<SmsRecord> smsRecords = new ArrayList<>();
-
-        for (RawEmail email : emails) {
-            List<SmsRecord> extracted = parser.parse(email);
-            if (extracted != null && !extracted.isEmpty()) {
-                smsRecords.addAll(extracted);
-            }
-        }
-        return smsRecords;
-    }
-
-    /**
-     * 组装 Flink 数据流拓扑
+     * 官方正统 FLIP-27 数据流拓扑编排
      */
     public DataStream<SmsRecord> buildStream(StreamExecutionEnvironment env) {
-        List<SmsRecord> allSmsRecords = extractAllSmsRecords();
-        LOG.info("📦 Total extracted SMS records ready for ingestion: {}", allSmsRecords.size());
+        LOG.info("🌊 [Pipeline] Assembling FLIP-27 DataStream topology (ImapSource -> SmsRecordParser)...");
 
-        if (allSmsRecords.isEmpty()) {
-            LOG.info("📭 No new SMS records to process. Emitting empty heartbeat record.");
-            allSmsRecords = Collections.singletonList(createHeartbeatRecord());
-        }
+        // 1. 接入 Flink 官方标准 FLIP-27 数据源
+        DataStream<RawEmail> emailStream = env.fromSource(
+                source,
+                WatermarkStrategy.noWatermarks(),
+                "Gmail-IMAP-FLIP27-Source"
+        );
 
-        DataStream<SmsRecord> smsStream = env.fromData(allSmsRecords);
+        // 2. 挂载业务清洗算子 (FlatMapFunction 转换)
+        DataStream<SmsRecord> smsStream = emailStream
+                .flatMap(parser)
+                .name("SmsRecordParser-FlatMap");
+
+        // 3. 挂载工人处理日志记录
         return smsStream.map(record -> {
             String logMsg = String.format("[Nova-Worker-Slot] [sms-gmail-r2] Ingesting: [Sender: %s, UID: %s, Body: %s]",
-                    record.getSender(), record.getMsgUid().substring(0, Math.min(8, record.getMsgUid().length())), record.getRawBody());
+                    record.getSender(),
+                    record.getMsgUid() != null ? record.getMsgUid().substring(0, Math.min(8, record.getMsgUid().length())) : "N/A",
+                    record.getRawBody());
             LOG.info(logMsg);
             return record;
         });
     }
 
-    /**
-     * 辅助工具：空数据时的兜底心跳记录
-     */
-    public SmsRecord createHeartbeatRecord() {
-        SmsRecord r = new SmsRecord();
-        r.setId(System.nanoTime());
-        r.setMsgUid("HEARTBEAT_" + UUID.randomUUID());
-        r.setChannel("EMAIL_IMAP");
-        r.setSender("SYSTEM_HEARTBEAT");
-        r.setReceiverPhone("NONE");
-        r.setReceivedAt(Instant.now());
-        r.setRawBody("[HEARTBEAT] No incoming SMS in Gmail. Pulse tick ok.");
-        r.setCreatedAt(Instant.now());
-        return r;
-    }
-
-    public GmailImapReader getReader() {
-        return reader;
+    public ImapSource getSource() {
+        return source;
     }
 
     public SmsRecordParser getParser() {

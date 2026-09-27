@@ -24,7 +24,9 @@ public class HelloWorldJob {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.BATCH); // 🎯 显式切换为批处理运行模式
 
-        // 2. 并发度设为 2 (完全匹配 NUC TaskManager 的 2 个 Task Slots)
+        // 💡 架构注解 (Mode B 零常驻批处理)：
+        // 当前作业由 K3s CronJob 拉起单 Pod 执行 (java -jar)，Flink 运行时底层通过环境嗅探自动降级为内嵌式 MiniCluster。
+        // 此处的 parallelism 并非触发拉起多个 K8s Pod，而是在单 Pod JVM 进程内分配 2 个并发 TaskSlot 工作线程。
         env.setParallelism(2);
 
         // 3. 构建模拟动账探活测试数据源
