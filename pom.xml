@@ -114,6 +114,13 @@
             <version>${log4j.version}</version>
         </dependency>
 
+        <!-- 7. Java Dotenv 环境变量加载库 (类似 Python load_dotenv) -->
+        <dependency>
+            <groupId>io.github.cdimascio</groupId>
+            <artifactId>dotenv-java</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+
         <!-- 7. 测试依赖 JUnit 5 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
