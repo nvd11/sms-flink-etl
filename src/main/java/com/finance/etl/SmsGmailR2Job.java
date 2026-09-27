@@ -1,5 +1,6 @@
 package com.finance.etl;
 
+import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
@@ -20,6 +21,9 @@ public class SmsGmailR2Job {
         LOG.info("🚀 Starting SMS Gmail to Cloudflare R2 Lakehouse ETL Batch Job (sms-gmail-r2)...");
         LOG.info("================================================================================");
 
+        String user = ConfigUtils.get("GMAIL_IMAP_USER", "alice.h.y.he@gmail.com");
+        LOG.info("📧 Configured Gmail IMAP Buffer Account: {}", user);
+
         // 1. 初始化 Flink 批处理流执行环境
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(2); // 匹配 NUC TaskManager 的 2 个并行 Slots
@@ -28,7 +32,7 @@ public class SmsGmailR2Job {
         DataStream<String> mockSmsStream = env.fromCollection(Arrays.asList(
             "[SMS-ODS-INIT] Hello Boss Jason! This is the official sms-gmail-r2 financial pipeline.",
             "[SMS-ODS-INIT] Target Storage: Cloudflare R2 (Iceberg table: iceberg.finance.raw_sms_records)",
-            "[SMS-ODS-INIT] Source Buffer: Gmail (alice.h.y.he@gmail.com) via IMAP SSL short-polling.",
+            "[SMS-ODS-INIT] Source Buffer: Gmail (" + user + ") via IMAP SSL short-polling.",
             "[SMS-ODS-INIT] Timestamp: " + Instant.now()
         ));
 
