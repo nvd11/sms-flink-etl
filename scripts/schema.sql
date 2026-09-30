@@ -2,21 +2,18 @@
 -- Standard DDL & Query Specification for Apache Iceberg & Trino
 -- Storage: Cloudflare R2 (S3-Compatible Bucket: "sms-flink-etl")
 -- Query Engine: Trino on NUC (K3s via ArgoCD)
--- Layer: ODS (Operational Data Store) / Raw Message Lakehouse Layer
+-- Layer: ODS (Operational Data Store) & ETL Metadata Layer
 -- ====================================================================
 
 -- 1. 创建湖仓 Database / Schema (挂载于 R2 存储桶上)
 CREATE SCHEMA IF NOT EXISTS iceberg.finance
 WITH (location = 's3://sms-flink-etl/iceberg/finance');
 
--- 2. 纯粹的 ODS 原始报文表 (Apache Iceberg 表格式 · Parquet 列式存储)
--- 严格遵循经典数据湖仓规范与数仓分层，字段全覆盖、零业务派生冗余
--- 采用“单表真理源 (Single Table Truth)”架构：内生 imap_uid 字段作为批处理任务的水位线游标
+-- 2. 纯粹的 ODS 原始报文业务资产表 (保持纯正领域模型，杜绝协议层概念污染)
 CREATE TABLE IF NOT EXISTS iceberg.finance.raw_sms_records (
     id              BIGINT,                              -- 全局递增序列 ID
-    imap_uid        BIGINT,                              -- 🎯 RFC 3501 IMAP 永久递增 UID (断点续传/下次批处理的起始水位线游标)
     msg_uid         VARCHAR,                             -- RFC 2822 Message-ID 或全局唯一消息指纹 (防重业务唯一键)
-    channel         VARCHAR,                             -- 采集通道: 'EMAIL_IMAP'
+    channel         VARCHAR,                             -- 采集通道: 'EMAIL_IMAP', 'SMS_DIRECT', 'WEBHOOK'
     sender          VARCHAR,                             -- 发送方原始号码: 95508, WECHAT_PAY, ALIPAY 等
     receiver_phone  VARCHAR,                             -- 接收短信的本机手机号码 / 卡槽标识 (SIM_SLOT_1, SIM_SLOT_2)
     received_at     TIMESTAMP(6) WITH TIME ZONE,         -- 原始短信到达物理时间 (带时区微秒戳)
@@ -29,43 +26,43 @@ WITH (
     sorted_by = ARRAY['received_at']                     -- 块内排序加速时间切片检索
 );
 
--- ====================================================================
--- 3. Flink SQL Batch Sink 注册示例 (S3A 直连 Cloudflare R2)
--- ====================================================================
--- CREATE CATALOG r2_iceberg WITH (
---     'type'='iceberg',
---     'catalog-type'='hadoop',
---     'warehouse'='s3a://sms-flink-etl/iceberg/warehouse',
---     'io-impl'='org.apache.iceberg.aws.s3.S3FileIO',
---     's3.endpoint'='https://8ac25a3a0ac482af1dbd6c65e118693e.r2.cloudflarestorage.com',
---     's3.path-style-access'='true'
--- );
+-- 3. 专职 ETL 管道同步水位元数据表 (关注点分离: 专用于记录批处理断点续传 offset)
+CREATE TABLE IF NOT EXISTS iceberg.finance.etl_sync_offsets (
+    job_name        VARCHAR,                             -- 作业唯一标识，例如: 'sms-gmail-r2', 'video-cleanup'
+    channel         VARCHAR,                             -- 采集通道，例如: 'EMAIL_IMAP', 'KAFKA', 'FILE'
+    source_target   VARCHAR,                             -- 采集目标标识，例如: 'alice.h.y.he@gmail.com'
+    last_offset     BIGINT,                              -- 🎯 增量水位游标 (对于 IMAP 而言即最后已成功同步的 UID)
+    last_event_time TIMESTAMP(6) WITH TIME ZONE,         -- 该批次最后一条数据的业务时间戳
+    updated_at      TIMESTAMP(6) WITH TIME ZONE          -- 本次元数据位点更新入湖时间
+)
+WITH (
+    format = 'PARQUET'
+);
 
 -- ====================================================================
--- 4. Trino 高级查询与金融审计实操参考
+-- 4. Trino 高级查询与湖仓运维实操参考
 -- ====================================================================
 
--- 4.1 基础检索与排重查询 (基于唯一 msg_uid 获取最新事实)
+-- 4.1 批处理增量水位探查 (查询当前数据源的最新同步位点)
+-- SELECT COALESCE(MAX(last_offset), 0) AS last_offset 
+-- FROM iceberg.finance.etl_sync_offsets 
+-- WHERE job_name = 'sms-gmail-r2' AND channel = 'EMAIL_IMAP';
+
+-- 4.2 基础检索与排重查询 (基于唯一 msg_uid 获取最新动账事实)
 -- SELECT * FROM iceberg.finance.raw_sms_records
 -- WHERE received_at >= CURRENT_DATE - INTERVAL '7' DAY
 -- ORDER BY received_at DESC;
 
--- 4.2 金融审计时间旅行 (Time Travel - 回溯任意历史切片)
+-- 4.3 金融审计时间旅行 (Time Travel - 回溯任意历史切片)
 -- 调阅截至指定时间点的数据快照：
 -- SELECT COUNT(*), MAX(received_at) 
 -- FROM iceberg.finance.raw_sms_records 
 -- FOR TIMESTAMP AS OF TIMESTAMP '2026-09-25 18:00:00 UTC';
 
--- 4.3 查看 Iceberg 快照树与元数据历史
+-- 4.4 查看 Iceberg 快照树与元数据历史
 -- SELECT snapshot_id, committed_at, operation, summary['total-records'] AS total_records
 -- FROM iceberg.finance."raw_sms_records$snapshots"
 -- ORDER BY committed_at DESC;
-
--- 4.4 批处理增量水位探查 (Lakehouse-Native Offset Discovery Query)
--- 下次批处理启动时，以此作为起始水位游标拉取增量邮件：
--- SELECT COALESCE(MAX(imap_uid), 0) AS last_offset_uid 
--- FROM iceberg.finance.raw_sms_records 
--- WHERE channel = 'EMAIL_IMAP';
 
 -- 4.5 下游 DWD 明细层消费 (在 Trino 中直接进行正则抽取与视图清洗)
 -- CREATE OR REPLACE VIEW iceberg.finance.v_dwd_transactions AS

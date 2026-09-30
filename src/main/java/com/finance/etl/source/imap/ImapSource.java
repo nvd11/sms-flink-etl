@@ -8,10 +8,27 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 import java.io.Serializable;
 
 /**
- * Flink FLIP-27 规范: IMAP 邮件数据源连接器顶层门面 (ImapSource)
- * 职责：作为暴露给 Flink 流图（env.fromSource）的唯一顶层工厂入口。
- * 显式声明为有界批处理 (Boundedness.BOUNDED)，
- * 负责生产 ImapSplitEnumerator (JobManager 端) 与 ImapSourceReader (TaskManager 端)。
+ * Flink FLIP-27 Specification: IMAP Email Data Source Connector Facade (ImapSource)
+ * Role: The unified top-level factory entry point exposed to the Flink execution environment (env.fromSource).
+ * Explicitly declared as bounded batch execution (Boundedness.BOUNDED).
+ * Produces ImapSplitEnumerator (JobManager Master coordinator) and ImapSourceReader (TaskManager Worker).
+ *
+ * 💡【Architectural Note on Generics: Source<RawEmail, ImapSplit, Void>】
+ * The Flink FLIP-27 Source interface defines three generic parameters: Source<T, SplitT, EnumChkT>
+ * 1. T (RawEmail):
+ *    The record type emitted by this Source and ingested by downstream Flink transformation operators.
+ * 2. SplitT (ImapSplit):
+ *    The task work-order descriptor (split) dispatched from Master (JobManager) to Worker (TaskManager).
+ * 3. EnumChkT (java.lang.Void):
+ *    The checkpoint state snapshot type persisted by SplitEnumerator during stateful fault-tolerance checkpoints.
+ *    - Why capital 'Void' instead of lowercase 'void'?
+ *      Java generics require reference object types (Classes). Lowercase 'void' is a language keyword 
+ *      and forbidden inside generic angle brackets <...>. Capital 'java.lang.Void' is an uninstantiable 
+ *      placeholder class whose only permissible value is null.
+ *    - Why Void here?
+ *      In our ephemeral run-to-completion batch architecture (Mode B), the ImapSplitEnumerator is purely 
+ *      stateless across job invocations (snapshotState returns null). Specifying 'Void' is the standard 
+ *      Flink paradigm to declare that no enumerator checkpointing state is managed or stored.
  */
 public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializable {
     private static final long serialVersionUID = 1L;

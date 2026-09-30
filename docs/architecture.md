@@ -194,14 +194,18 @@ com.finance.etl
 
 ---
 
-## 5. 表结构 Schema 规范与单表水位真理源 (Single Table Truth)
+## 5. 表结构 Schema 规范与关注点分离 (Domain vs Pipeline Metadata)
 
-* **表规范**：`iceberg.finance.raw_sms_records`（完整 DDL 详见 [`scripts/schema.sql`](../scripts/schema.sql)）
-* **单表真理源架构 (Single Table Truth for Offset Cursor)**：
-  - 传统方案常引入外置元数据表记录批处理位点，易引发“主表写入成功但元表记录失败”的跨表分布式不一致；
-  - 本项目采用 **单表内生游标机制**：在主表中设计 `imap_uid BIGINT` 物理字段，由 Iceberg 快照机制保证数据与位点在同一个原子事务中提交。
-  - 下次批处理启动时，调度主管通过 `SELECT COALESCE(MAX(imap_uid), 0) FROM iceberg.finance.raw_sms_records WHERE channel = 'EMAIL_IMAP'` 秒级探查水位，配合 Lookback 窗口与 SHA-256 幂等指纹，100% 杜绝漏单与重单。
-* **分区与排序策略**：
-  - 采用 Iceberg 隐藏分区（Hidden Partitioning）特性，按接收月份分区 `month(received_at)`，兼顾文件紧凑度与查询剪枝效率；
-  - 采用文件内排序 `sorted_by = ARRAY['received_at']` 加速基于时间的过滤扫描；
+系统在数据湖仓表模型设计上严格遵循**领域驱动设计（DDD）与关注点分离原则（SoC）**，坚决杜绝用传输通道层（如 IMAP 协议、Kafka 分区）的临时元数据污染业务资产模型。
+
+* **业务资产主表**：`iceberg.finance.raw_sms_records`（完整 DDL 详见 [`scripts/schema.sql`](../scripts/schema.sql)）
+  - **纯粹领域资产模型**：纯粹保存短信业务属性（`id`, `msg_uid`, `channel`, `sender`, `receiver_phone`, `received_at`, `raw_body`, `created_at`）；
+  - 严禁将 `imap_uid` 等特定通信协议参数硬塞入业务表，保证未来从企业微信、Android 蓝牙或外部 Webhook 接入短信时，Schema 永久稳定纯洁；
+  - 隐藏分区与排序：按短信物理到达月份自动隐藏分区 `month(received_at)`，块内按到达时间物理排序 `sorted_by = ARRAY['received_at']`。
+
+* **调度同步状态表**：`iceberg.finance.etl_sync_offsets`
+  - **集中式水位游标中心**：专职解耦并持久化各 Pipeline 批处理任务的消费位点；
+  - 包含字段：`job_name`（作业标识）、`channel`（通道类型）、`source_target`（目标标识）、`last_offset`（增量水位游标，如 IMAP UID / Kafka Offset）、`last_event_time`、`updated_at`；
+  - 批处理任务启动时，通过 `SELECT COALESCE(MAX(last_offset), 0) FROM iceberg.finance.etl_sync_offsets WHERE job_name = 'sms-gmail-r2'` 秒级获取上一次成功提交的水位线，实现可靠的断点续传。
+
 * **时间标准**：统一采用带时区微秒时间戳（`TIMESTAMP(6) WITH TIME ZONE`）。

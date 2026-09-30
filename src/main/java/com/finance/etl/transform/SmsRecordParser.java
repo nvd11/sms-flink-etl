@@ -67,7 +67,6 @@ public class SmsRecordParser implements FlatMapFunction<RawEmail, SmsRecord>, Se
 
         SmsRecord record = new SmsRecord();
         record.setId(System.nanoTime());
-        record.setImapUid(email.getImapUid());
         record.setMsgUid(fingerprint);
         record.setChannel("EMAIL_IMAP");
         record.setSender(sender);

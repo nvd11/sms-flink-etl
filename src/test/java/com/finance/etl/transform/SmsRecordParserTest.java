@@ -32,7 +32,6 @@ public class SmsRecordParserTest {
         assertEquals(1, records.size());
 
         SmsRecord r = records.get(0);
-        assertEquals(1088L, r.getImapUid(), "应正确映射邮件的 RFC 3501 IMAP UID");
         assertEquals("95508", r.getSender());
         assertEquals("EMAIL_IMAP", r.getChannel());
         assertEquals("SIM_SLOT_1", r.getReceiverPhone());

@@ -48,6 +48,16 @@ public class ImapSourceReader implements SourceReader<RawEmail, ImapSplit> {
         this.proxyPort = proxyPort;
     }
 
+    /**
+     * 💡【核心 RPC 拓扑注解：context.sendSplitRequest() 的远程调用映射关系】
+     * 
+     * 此处是 Worker (TaskManager) 与 Master (JobManager) 之间建立拉模式 (Pull-Based) 调度的触发引信：
+     * 1. 物理链路：当前 Worker 线程调用 context.sendSplitRequest() 时，底层 SourceReaderContextImpl 会
+     *    自动获取本机主机名并封装为 RequestSplitEvent(host) RPC 事件，通过 Netty / Pekko 发送给 JobManager。
+     * 2. 遥控端回调：JobManager 端的 SourceCoordinator 收到该 RPC 事件后，会精准回调触发
+     *    ImapSplitEnumerator.handleSplitRequest(int subtaskId, String requesterHostname)。
+     * 3. 闭环协作：Worker 借此向 Master 索要工单切片 (ImapSplit)，从而驱动数据流拉取与流转。
+     */
     @Override
     public void start() {
         LOG.info("👷 [Worker Slot {}] ImapSourceReader started. Requesting split from JobManager...",
@@ -137,7 +147,20 @@ public class ImapSourceReader implements SourceReader<RawEmail, ImapSplit> {
     }
 
     /**
-     * 针对单个 ImapSplit 建立 IMAP 短连接并拉取指定邮件
+     * 💡【核心分布式架构注解：为什么此处 Worker 还要连一次 Gmail？（全链路连了两次 Gmail 的设计权衡）】
+     * 
+     * 在全链路中，系统确实先后对 Gmail 发起了两次连接：
+     * 1. 第一次在 Master (ImapSplitEnumerator): 仅探查增量邮件元数据，抓取纯数字的邮件编号列表 (UIDs)。
+     * 2. 第二次在 Worker (此处 fetchEmailsForSplit): 依据工单派发的 UIDs，再次建连下载完整邮件报文体 (Body/Header)。
+     * 
+     * 之所以采用看似多一次网络握手的“保守派”工业级设计，是基于大数据分布式体系的两大铁律防线：
+     * 1. 绝对杜绝 Master (JobManager) 内存雪崩 (OOM 防线):
+     *    在大数据与 Flink 规范中，Master 严禁触碰实体大数据（Data/砖头），只能掌管元数据指针（Metadata/账本）。
+     *    若全量历史补录积压 10 万封邮件，若 Master 直接抓取邮件全文并塞入 Split，将瞬间挤爆 JobManager 堆内存造成集群崩溃；
+     *    而仅抓取 UID 列表（10 万个 Long 仅占不足 1MB），Master 稳如泰山，真正搬运几百兆数据的繁重网络/IO负载被均匀分摊到下游多并发 Worker。
+     * 2. Split 跨网络 RPC 与快照存储的轻量化契约:
+     *    工单 (ImapSplit) 需要经历序列化并通过 Pekko 网络分发，且需要参与 Flink State Snapshot 持久化。
+     *    工单只记录“去哪拉、拉哪几条”，不夹带沉重数据资产，符合分布式高可用与轻量容错契约。
      */
     public List<RawEmail> fetchEmailsForSplit(ImapSplit split) {
         List<RawEmail> emails = new ArrayList<>();
@@ -146,18 +169,7 @@ public class ImapSourceReader implements SourceReader<RawEmail, ImapSplit> {
             return emails;
         }
 
-        Properties props = new Properties();
-        props.put("mail.store.protocol", "imaps");
-        props.put("mail.imaps.host", host);
-        props.put("mail.imaps.port", String.valueOf(port));
-        props.put("mail.imaps.ssl.enable", "true");
-        props.put("mail.imaps.connectiontimeout", "10000");
-        props.put("mail.imaps.timeout", "10000");
-
-        if (proxyHost != null && !proxyHost.trim().isEmpty()) {
-            props.put("mail.imaps.socks.host", proxyHost.trim());
-            props.put("mail.imaps.socks.port", String.valueOf(proxyPort));
-        }
+        Properties props = ImapUtils.createImapsProperties(host, port, proxyHost, proxyPort);
 
         Store store = null;
         Folder folder = null;

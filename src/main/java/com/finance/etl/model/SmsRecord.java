@@ -6,18 +6,17 @@ import java.util.Objects;
 
 /**
  * 金融短信动账 ODS 层原始记录模型 (严格对齐 iceberg.finance.raw_sms_records 表结构)
- * 采用单表真理源架构: 内置 imapUid 作为断点续传/下次批处理的起始水位线游标。
+ * 纯粹领域资产模型：严禁掺杂协议层/调度层临时游标字段 (如 imapUid)。
  */
 public class SmsRecord implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private Long id;                // 全局递增序列 ID
-    private Long imapUid;           // 🎯 RFC 3501 IMAP 永久递增 UID (水位线游标)
-    private String msgUid;          // 唯一消息指纹 (防重业务键)
-    private String channel;         // 采集渠道: 'EMAIL_IMAP'
-    private String sender;          // 发送方 (如: 95508, 微信支付)
-    private String receiverPhone;   // 本机卡槽接收手机号
-    private Instant receivedAt;     // 短信到达物理时间 (UTC微秒时间戳)
+    private String msgUid;          // 唯一消息指纹 (RFC 2822 Message-ID 或全文哈希防重键)
+    private String channel;         // 采集渠道: 'EMAIL_IMAP', 'SMS_DIRECT', 'WEBHOOK'
+    private String sender;          // 发送方 (如: 95508, 微信支付, 支付宝)
+    private String receiverPhone;   // 本机卡槽接收手机号 / 卡槽标识
+    private Instant receivedAt;     // 短信到达物理时间 (带时区微秒时间戳)
     private String rawBody;         // 100% 原始短信报文正文
     private Instant createdAt;      // 本地入湖处理时间
 
@@ -25,10 +24,9 @@ public class SmsRecord implements Serializable {
     public SmsRecord() {
     }
 
-    public SmsRecord(Long id, Long imapUid, String msgUid, String channel, String sender,
+    public SmsRecord(Long id, String msgUid, String channel, String sender,
                      String receiverPhone, Instant receivedAt, String rawBody, Instant createdAt) {
         this.id = id;
-        this.imapUid = imapUid;
         this.msgUid = msgUid;
         this.channel = channel;
         this.sender = sender;
@@ -44,14 +42,6 @@ public class SmsRecord implements Serializable {
 
     public void setId(Long id) {
         this.id = id;
-    }
-
-    public Long getImapUid() {
-        return imapUid;
-    }
-
-    public void setImapUid(Long imapUid) {
-        this.imapUid = imapUid;
     }
 
     public String getMsgUid() {
@@ -127,7 +117,6 @@ public class SmsRecord implements Serializable {
     public String toString() {
         return "SmsRecord{" +
                 "id=" + id +
-                ", imapUid=" + imapUid +
                 ", msgUid='" + msgUid + '\'' +
                 ", channel='" + channel + '\'' +
                 ", sender='" + sender + '\'' +
