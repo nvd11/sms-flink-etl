@@ -1,0 +1,71 @@
+name: Run JUnit Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_target:
+        description: 'Specific test class to run (e.g. SmsGmailR2JobTest, or leave empty for all 24 tests)'
+        required: false
+        default: 'SmsGmailR2JobTest'
+  push:
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "pom.xml"
+      - ".github/workflows/run-junit-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  run-tests:
+    name: Run JUnit Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Inject .env Secrets
+        run: |
+          echo "${{ secrets.ENV_FILE }}" > .env
+          echo "✓ .env file created successfully from GitHub Secrets"
+
+      - name: Run JUnit Tests
+        id: test_step
+        run: |
+          TEST_TARGET="${{ inputs.test_target }}"
+          START_TIME=$(date +%s%N)
+          if [ -n "$TEST_TARGET" ]; then
+            echo "🧪 Running targeted test: $TEST_TARGET"
+            mvn test -Dtest="$TEST_TARGET"
+          else
+            echo "🧪 Running full test suite (all tests)"
+            mvn test
+          fi
+          END_TIME=$(date +%s%N)
+          DURATION_MS=$(( (END_TIME - START_TIME) / 1000000 ))
+          echo "⏱️ Total Maven execution duration: ${DURATION_MS} ms ($(( DURATION_MS / 1000 ))s)"
+
+      - name: Output Test Timing Summary
+        if: always()
+        run: |
+          echo "==================== [JUnit Test Timing Summary] ===================="
+          if ls target/surefire-reports/*.txt 1> /dev/null 2>&1; then
+            grep -h "Tests run" target/surefire-reports/*.txt
+          fi
+          echo "====================================================================="
+
+      - name: Upload Surefire Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7

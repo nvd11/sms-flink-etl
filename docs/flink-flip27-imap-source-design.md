@@ -92,16 +92,23 @@ com.finance.etl.source.imap
 #### ③ 任务调度协调官：`ImapSplitEnumerator`
 * **接口**：`implements SplitEnumerator<ImapSplit, Void>`
 * **所在位置**：JobManager（Master 节点）
+* **真·动态多并发分片调度策略 (Dynamic Parallel Split Slicing + Fair Dispatching)**：
+  * Master 调度器不再将所有邮件塞入单个大工单，而是通过 `context.currentParallelism()` 动态感知作业配置的物理并发度（由 `FLINK_PARALLELISM` 注入，默认 2）；
+  * 按照并发度将邮件 UID 列表向上取整切分为 N 张独立的并行工单（例如 200 封切分为 100 + 100）；
+  * **专属邮箱制公平派单 (Dedicated-Mailbox Fair Dispatch)**：工单在切片瞬间即通过 `splitIndex % parallelism` 确定性绑定工位，存入 `Map<Integer, Queue<ImapSplit>> splitsBySubtask` 专属队列。subtaskId 是 Flink ExecutionGraph 在作业编译期静态确定的事实（0..N-1，早于任何 Worker 注册），因此绑定无需运行时探测；`context.registeredReaders()` 属事后信息，仅用于排队补偿；
+  * **竞态根因与解药**：共享 FIFO 队列下启动最快的 Worker 0 可在 Worker 1 注册前连发多次 split request 抢空全部工单（实测 2 个 split 全被 Worker 0 吞下、Worker 1 空转 14 秒后退出）。专属邮箱从结构上根除垄断——每个工位只能领取自己名下的工单，退单 (`addSplitsBack`) 也归还原主人的队列（缓存亲和性）；
+  * 多个 TaskSlot 线程并发建立各自的 IMAP 传输通道同时拉取，消除单线程长尾效应，算力与带宽利用率翻倍。
 * **增量水位机制 (Lakehouse-Native Watermark Discovery · 方案 1)**：
-  * 在无常驻内存的批处理（Mode B）下，调度主管启动时**优先读取 Cloudflare R2 上 Iceberg 表的最新元数据**，获取已成功落盘的物理最大时间戳 `MAX(received_at)`；
-  * 以此高水位线（配合轻量 Lookback 窗口，如往前宽限 10 分钟）作为本次 IMAP 检索的起始条件，结合 `UNSEEN` 邮件标签，双重杜绝“手抖误读导致的漏拉”或“跨批次重启状态丢失”；
+  * 在无常驻内存的批处理（Mode B）下，调度主管启动时**优先读取湖仓/环境配置中的已同步最高 UID 水位**；
+  * **彻底无视已读/未读状态**：无论邮件是否已被人工在手机或网页端误点为已读，均只依据 `UID > lastSyncedUid` 指令范围直扫，绝不漏单；
+  * **冷启动安全基线 (零搜索开销)**：当水位为 0 时，严禁调用昂贵的服务端 `search(UNSEEN)`，而是直接基于物理序号倒序截取收件箱最新一批窗口邮件（纯本地指针切片，0 网络搜索 RTT），实现毫秒级初始出单；
 * **核心生命周期**：
   * `start()`：
-    1. 探查 Iceberg 湖仓高水位（若首次启动或空表，则采用默认全量/7天回溯策略）；
-    2. 建立一次性轻量 IMAP 探查，查询符合水位范围的未读/增量邮件 UID 列表；
-    3. 若有匹配邮件，生成单个或多个 `ImapSplit`（携带具体 `specificUids` 或 `startUid~endUid`）放入待分配队列 `pendingSplits`；
+    1. 探查湖仓高水位（若未配置或冷启动，则退回物理序号最新窗口）；
+    2. 建立一次性轻量 IMAP 探查，获取符合范围的邮件 UID 列表（彻底无视已读未读）；
+    3. 若有匹配邮件，依据 `context.currentParallelism()` 动态切分成 N 个 `ImapSplit`，按 `splitIndex % parallelism` 存入各工位的专属队列 `splitsBySubtask`；
     4. 若无增量邮件，生成一条带特殊标记的心跳空工单（保证下游链路保活探测）；
-  * `handleSplitRequest(int subtaskId, String requesterHostname)`：当 TaskManager 的 Reader 索要工单时，从队列出队并分配（`context.assignSplit()`）；
+  * `handleSplitRequest(int subtaskId, String requesterHostname)`：当 TaskManager 的 Reader 索要工单时，从**该工位专属队列**出队并分配（`context.assignSplit()`）——即使 Worker 0 启动飞快连发多次请求，也只能领走自己名下的工单；
   * 当所有分片分配完毕后，向对应 Subtask 发送 `context.signalNoMoreSplits(subtaskId)`。
 
 #### ④ 真实拉取执行人：`ImapSourceReader`
@@ -165,3 +172,23 @@ DataStream<SmsRecord> smsStream = emailStream
 1. **掌握工业级标准**：彻底吃透 Flink FLIP-27 内部两阶段交互、Enumerator 状态与 Reader 事件机制；
 2. **极速单测覆盖**：支持通过 Mock Split 或本地邮件 Stub 对 `ImapSourceReader` 和 `ImapSplitEnumerator` 分别进行纯 POJO 单测；
 3. **完美融入 Mode B**：在单 Pod MiniCluster 下，Enumerator 与 Reader 协同步调完全闭环，算完即发 `END_OF_INPUT` 优雅退出。
+
+### 📊 工程实测性能战绩 (Real Gmail Integration)
+
+| 优化阶段 | 场景 | 耗时 | 真相 |
+|---|---|---|---|
+| 基线 (逐封串行拉取) | 89 封邮件 | 192s | N+1 次跨洋 RTT |
+| 批量整包预取 + 网络调优 | 89 封邮件 | 32s | **6x** |
+| + 动态并行分片 (TaskExecutor slot=1) | 200 封邮件 | 17~31s | ⚠️ **伪并行**：两个 subtask 排队共用唯一 slot 物理串行，耗时随网络波动 |
+| + `NUM_TASK_SLOTS` 对齐 parallelism | 200 封邮件 | ~18s (网络好) / 27s (网络差) | ✅ **真并行**：双 Worker 同毫秒部署、同毫秒领单 |
+| + **拔除 UNSEEN 搜索 (改物理序号倒序截取)** | 200 封邮件 | **8.91s** | ⚡ **极速闭环**：坚守“彻底无视已读未读”铁律，消灭服务端全箱 search，`discoverSplits` 仅耗 400ms！ |
+
+**伪并行排坑实录 (Shared Allocation ID 铁证)**：仅调用 `env.setParallelism(N)` 不够！本地 MiniCluster 的 TaskExecutor 默认只持有 1 个 TaskSlot，而同一 vertex 的多个 subtask 不允许共享 slot，于是 N 个 subtask 在唯一 slot 上排队接力（日志中 (1/2) 与 (2/2) 的 Deploying 事件共用同一 allocation id 即为铁证）。解药：通过 `Configuration` 显式设置 `TaskManagerOptions.NUM_TASK_SLOTS = parallelism`，再传入 `getExecutionEnvironment(conf)`。
+
+**消灭 UNSEEN 铁证日志 (400 毫秒出单)**：
+```
+2026-10-02 02:41:39.438  ❄️ Cold start mode (watermark = 0, total inbox messages: 432). Fetching latest batch (limit: 200)...
+2026-10-02 02:41:39.841  📦 Sliced 200 UIDs into 2 parallel splits (chunkSize: 100) across parallelism 2. (耗时仅 403ms!)
+2026-10-02 02:41:40.962  📥 [Worker Slot 0/1] Received 1 new split(s).
+2026-10-02 02:41:46.622  🏁 [Worker Slot 0/1] Terminal state reached. (测试总耗时 8.91s 达成！)
+```

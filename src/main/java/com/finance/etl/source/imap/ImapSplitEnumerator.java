@@ -2,7 +2,6 @@ package com.finance.etl.source.imap;
 
 import com.finance.etl.util.ConfigUtils;
 import jakarta.mail.*;
-import jakarta.mail.search.FlagTerm;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.slf4j.Logger;
@@ -17,7 +16,7 @@ import java.util.*;
  * 职责：运行在 Master (JobManager) 节点上，单并发执行。
  * 在作业启动时探查 Lakehouse 湖仓已落盘的高水位游标 (MAX(last_offset))，
  * 优先采用“基于 UID 水位直扫（Watermark-Driven）”，无论邮件是否已读均绝不漏拉；
- * 首次冷启动（水位为 0）时回退至未读邮件与最近窗口探测。
+ * 首次冷启动（水位为 0）时回退至最新物理窗口邮件探测（彻底无视已读/未读状态）。
  */
 public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     private static final Logger LOG = LoggerFactory.getLogger(ImapSplitEnumerator.class);
@@ -31,17 +30,22 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     private final int proxyPort;
     private final int maxBatchSize;
 
-    // 💡【核心架构注解：为什么 pendingSplits 必须设计为 Queue 而不是单个变量？】
-    // 在当前单邮箱日常轻量增量批处理场景下，单次 discoverSplits() 通常仅产出 1 个工单 (Queue 长度为 1)。
-    // 之所以严格采用 Queue<ImapSplit> FIFO 队列结构，是基于 Flink FLIP-27 核心规范的三大必然考量：
-    // 1. 容错与退单重试契约 (Fault-Tolerance & addSplitsBack):
-    //    当下游某个 Worker (TaskManager) 发生网络抖动或崩溃时，Flink 框架会回调 addSplitsBack(List<ImapSplit>, subtaskId)，
-    //    将未消费完毕的多个工单原样退回。必须依赖队列结构才能完整承接退单并重新调度给活着的 Worker。
-    // 2. 多并发任务切分支持 (Work Stealing & Concurrency Scaling):
-    //    未来大批量历史补录时，discoverSplits() 可按 UID 区间切分成 N 个工单推入队列，供多个 Worker 线程并行争抢消费。
-    // 3. 多文件夹/多源扩展性 (Multi-Source Extensibility):
-    //    支持未来同时挂载多个邮箱文件夹 (如 INBOX, Spam, Notifications) 生成多工单排队有序消费。
-    private final Queue<ImapSplit> pendingSplits = new ArrayDeque<>();
+    // 💡【核心架构注解：为什么必须是 Map<subtaskId, Queue> 专属邮箱制 (Fair Dispatching) 而不是全局共享 Queue？】
+    // 1. 先到先得的竞态饥渴 (Race-Condition Starvation)：
+    //    共享 FIFO 队列下，启动极快的 Worker 0 (Subtask 0) 可在 Worker 1 完成注册前连发多次 split request，
+    //    将 N 个工单一扫而空 (实测 2 个 split 全被 Worker 0 抢走，Worker 1 空转 14 秒后直接 NoMoreSplits 退出)。
+    //    专属邮箱制从结构上根除垄断：每个工位只允许领取自己名下的工单。
+    // 2. subtaskId 的静态确定性 (Deterministic Subtask Indexing)：
+    //    subtaskId 并非运行时动态发现的信息——Flink ExecutionGraph 在作业提交 (编译期) 阶段就按 parallelism
+    //    将 Source 算子静态复制为 N 个 ExecutionVertex，subtaskIndex 固定为 0..N-1，早于任何 Worker 注册与 RPC。
+    //    因此切片时用纯数学公式 splitIndex % parallelism 即可完成工单与工位的确定性绑定，零运行时探测成本。
+    //    (context.registeredReaders() 属运行时事后信息，仅用于"谁在等"的排队补偿，不参与切片归属决策。)
+    // 3. 容错与退单亲和性 (Failure Affinity)：
+    //    addSplitsBack 回退的未完成工单将归还至原主人的专属队列，保证恢复后的 Worker 优先续跑自己
+    //    熟悉的 UID 区间 (缓存亲和性)，也避免退单被其他 Worker 无序争抢。
+    // 4. 多文件夹/多源扩展性 (Multi-Source Extensibility)：
+    //    未来多邮箱文件夹 (INBOX, Spam, Notifications) 可按 subtaskId 哈希归入不同专属队列，天然分域消费。
+    private final Map<Integer, Queue<ImapSplit>> splitsBySubtask = new HashMap<>();
 
     // 💡【核心架构注解：subtasksAwaitingSplits 是什么？】
     // 它本质上是 Master (主管) 手里的一张“等候室工位工号排队名单” (Waiting Room Set)。
@@ -128,7 +132,8 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     @Override
     public void addSplitsBack(List<ImapSplit> splits, int subtaskId) {
         LOG.warn("↩️ [JobManager Master] Adding back {} failed/unassigned split(s) from Subtask {}.", splits.size(), subtaskId);
-        pendingSplits.addAll(splits);
+        // 退单亲和性：未消费完的工单归还至原主人的专属队列，恢复后优先续跑 (缓存亲和性)
+        splitsBySubtask.computeIfAbsent(subtaskId, k -> new ArrayDeque<>()).addAll(splits);
         assignNextSplit(subtaskId);
     }
 
@@ -140,13 +145,20 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     @Override
     public void close() throws IOException {
         LOG.info("🛑 [JobManager Master] Closing ImapSplitEnumerator.");
-        pendingSplits.clear();
+        splitsBySubtask.clear();
         subtasksAwaitingSplits.clear();
     }
 
+    /**
+     * 💡【公平派单核心 (Fair Dispatch)】：Worker 只能从自己的专属邮箱取工单。
+     * 与旧版共享 FIFO 队列的根本区别：即使 Worker 0 启动飞快连发多次 split request，
+     * 它也只能领走 splitsBySubtask.get(0) 名下的工单；Worker 1 的工单谁也抢不走。
+     * 专属队列为空时立即 signalNoMoreSplits，该工位功成身退。
+     */
     private synchronized void assignNextSplit(int subtaskId) {
-        if (!pendingSplits.isEmpty()) {
-            ImapSplit split = pendingSplits.poll();
+        Queue<ImapSplit> dedicatedQueue = splitsBySubtask.get(subtaskId);
+        ImapSplit split = (dedicatedQueue != null) ? dedicatedQueue.poll() : null;
+        if (split != null) {
             LOG.info("🚀 [JobManager Master] Assigning split {} to Worker Subtask {}.", split.splitId(), subtaskId);
             context.assignSplit(split, subtaskId);
         } else {
@@ -188,13 +200,14 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
      *      直接从 Gmail 服务器检索所有在物理时间线上晚于上次水位的全新邮件。
      *    - 配合下游按 SHA-256 业务指纹幂等去重，既彻底杜绝漏单，又天然免疫网络重试引起的重复记账。
      * 3. 冷启动阶段 (lastSyncedUid == 0)：
-     *    - 表中尚无任何历史同步记录，安全降级为按 UNSEEN 未读邮件进行初始全量拉取。
+     *    - 表中尚无任何历史同步记录，无视已读未读状态，直接基于物理序号倒序截取最新窗口邮件进行初始同步。
      */
     public void discoverSplits() {
         // 1. 前置凭据快速检查
         if (password == null || password.trim().isEmpty() || password.equals("your_password")) {
             LOG.warn("⚠️ [JobManager Master] Password not provided. Generating empty heartbeat split.");
-            pendingSplits.add(new ImapSplit("split-heartbeat-0", "INBOX", Collections.emptyList()));
+            splitsBySubtask.computeIfAbsent(0, k -> new ArrayDeque<>())
+                    .add(new ImapSplit("split-heartbeat-0", "INBOX", Collections.emptyList()));
             return;
         }
 
@@ -238,20 +251,23 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                         }
                     }
                 } else {
-                    // 🌟 模式 B：首次冷启动模式 (Cold Start)
-                    // 水位为 0，拉取最近批次的未读 UNSEEN 邮件作为安全启动基线 (由 IMAP_MAX_BATCH_SIZE 配置驱动，杜绝硬编码)
-                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0). Probing unread UNSEEN messages (batch limit: {})...", maxBatchSize);
-                    Message[] unreadMessages = inbox.search(new FlagTerm(new Flags(Flags.Flag.SEEN), false));
-                    if (unreadMessages != null && unreadMessages.length > 0) {
-                        int total = unreadMessages.length;
-                        int limit = Math.min(total, maxBatchSize);
-                        Message[] trimmed = Arrays.copyOfRange(unreadMessages, total - limit, total);
+                    // 🌟 模式 B：首次冷启动模式 (Cold Start / Initial Sync)
+                    // 湖仓尚无已落盘水位 (lastSyncedUid == 0)。
+                    // 严格坚守“彻底无视已读未读”架构铁律：严禁在服务端发起昂贵的 search(UNSEEN) 全箱搜索！
+                    // 直接基于物理序号截取收件箱中最新的 maxBatchSize 封邮件（纯内存指针截取，0 搜索网络开销），
+                    // 既保证拉取最新一批动账短信，又彻底消灭了长达 14 秒的服务端遍历延迟。
+                    int totalCount = inbox.getMessageCount();
+                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0, total inbox messages: {}). Fetching latest batch (limit: {})...",
+                            totalCount, maxBatchSize);
+                    if (totalCount > 0) {
+                        int start = Math.max(1, totalCount - maxBatchSize + 1);
+                        Message[] latestMessages = inbox.getMessages(start, totalCount);
 
                         FetchProfile fp = new FetchProfile();
                         fp.add(UIDFolder.FetchProfileItem.UID);
-                        inbox.fetch(trimmed, fp);
+                        inbox.fetch(latestMessages, fp);
 
-                        for (Message msg : trimmed) {
+                        for (Message msg : latestMessages) {
                             uids.add(uidFolder.getUID(msg));
                         }
                     }
@@ -259,10 +275,33 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
             }
 
             if (!uids.isEmpty()) {
-                ImapSplit split = new ImapSplit("split-imap-" + System.currentTimeMillis(), "INBOX", uids);
-                pendingSplits.add(split);
-                LOG.info("📦 [JobManager Master] Generated active split with {} email UIDs (above watermark {}): {}",
-                        uids.size(), lastSyncedUid, uids);
+                // 🚀【真·并行分片调度】：依据 Flink 运行时注入的物理并发度，将 UIDs 均衡切分成 N 个工单
+                // 并按 splitIndex % parallelism 确定性绑定专属工位 (subtaskId 在作业编译期即静态确定为 0..N-1)
+                int parallelism = Math.max(1, context.currentParallelism());
+                int chunkSize = (int) Math.ceil((double) uids.size() / parallelism);
+                long timestamp = System.currentTimeMillis();
+                int splitIndex = 0;
+
+                for (int i = 0; i < uids.size(); i += chunkSize) {
+                    int end = Math.min(i + chunkSize, uids.size());
+                    List<Long> subList = new ArrayList<>(uids.subList(i, end));
+
+                    int ownerSubtask = splitIndex % parallelism;
+                    ImapSplit split = new ImapSplit(
+                            "split-imap-" + timestamp + "-" + splitIndex,
+                            "INBOX",
+                            subList
+                    );
+                    splitsBySubtask
+                            .computeIfAbsent(ownerSubtask, k -> new ArrayDeque<>())
+                            .add(split);
+                    LOG.info("🗂️ [JobManager Master] Split {} ({} UIDs) dedicated to Worker Subtask {}.",
+                            split.splitId(), subList.size(), ownerSubtask);
+                    splitIndex++;
+                }
+
+                LOG.info("📦 [JobManager Master] Sliced {} UIDs into {} parallel splits (chunkSize: {}) across parallelism {}.",
+                        uids.size(), getPendingSplitsCount(), chunkSize, parallelism);
             } else {
                 // 两种模式均无增量数据时，拉取最近 5 封邮件用于批处理探活验证
                 int totalCount = inbox.getMessageCount();
@@ -279,14 +318,15 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                         uids.add(uidFolder.getUID(m));
                     }
                 }
-                ImapSplit split = new ImapSplit("split-verify-" + System.currentTimeMillis(), "INBOX", uids);
-                pendingSplits.add(split);
+                splitsBySubtask.computeIfAbsent(0, k -> new ArrayDeque<>())
+                        .add(new ImapSplit("split-verify-" + System.currentTimeMillis(), "INBOX", uids));
                 LOG.info("ℹ️ [JobManager Master] No new emails found. Generated verification split with {} recent UIDs.",
                         uids.size());
             }
         } catch (Exception e) {
             LOG.warn("⚠️ [JobManager Master] Failed to probe IMAP: {}. Emitting empty fallback split.", e.getMessage());
-            pendingSplits.add(new ImapSplit("split-fallback-0", "INBOX", Collections.emptyList()));
+            splitsBySubtask.computeIfAbsent(0, k -> new ArrayDeque<>())
+                    .add(new ImapSplit("split-fallback-0", "INBOX", Collections.emptyList()));
         } finally {
             try {
                 if (inbox != null && inbox.isOpen()) inbox.close(false);
@@ -297,6 +337,6 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     }
 
     public int getPendingSplitsCount() {
-        return pendingSplits.size();
+        return splitsBySubtask.values().stream().mapToInt(Queue::size).sum();
     }
 }
