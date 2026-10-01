@@ -43,20 +43,10 @@ public class SmsGmailR2Pipeline {
                 "Generic-Email-Source"
         );
 
-        // 2. 挂载抽象业务清洗算子
-        DataStream<SmsRecord> smsStream = emailStream
+        // 2. 挂载抽象业务清洗算子 (由 Parser 内部负责规整与实体日志记录)
+        return emailStream
                 .flatMap(parser)
                 .name("SmsRecordParser-FlatMap");
-
-        // 3. 挂载工人处理日志记录
-        return smsStream.map(record -> {
-            String logMsg = String.format("[Nova-Worker-Slot] [sms-gmail-r2] Ingesting: [Sender: %s, UID: %s, Body: %s]",
-                    record.getSender(),
-                    record.getMsgUid() != null ? record.getMsgUid().substring(0, Math.min(8, record.getMsgUid().length())) : "N/A",
-                    record.getRawBody());
-            LOG.info(logMsg);
-            return record;
-        });
     }
 
     public Source<RawEmail, ?, ?> getSource() {

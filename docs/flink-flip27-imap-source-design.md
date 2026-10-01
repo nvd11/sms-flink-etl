@@ -107,8 +107,13 @@ com.finance.etl.source.imap
 #### ④ 真实拉取执行人：`ImapSourceReader`
 * **接口**：`implements SourceReader<RawEmail, ImapSplit>`
 * **所在位置**：TaskManager（Worker Slot）
+* **生产级网络吞吐与抗超时调优策略 (Dual-Trophy Network Strategy)**：
+  1. **正文批量整包预取 (消灭 N+1 次串行 RTT)**：
+     传统 JavaMail 在循环读取 `msg.getContent()` 时会产生多达 N 次跨洋公网请求。本实现强制在 `FetchProfile` 中挂载 `IMAPFolder.FetchProfileItem.MESSAGE` 指令，驱动远程 IMAP 服务端一次性将整批邮件的全部报文体（Body/Header）打包下发，网络请求从 N 次缩减至 1 次；
+  2. **短超时与流控保护 (消灭 10 秒假死挂起)**：
+     通过专职工具类 `ImapUtils` 将 TCP 连接与读取超时统一收敛至 5 秒（`timeout=5000`），并配置 1MB 预取流式缓冲区（`fetchsize=1048576`）和整包获取（`partialfetch=false`），杜绝因小包频发被 Gmail 服务端掐断连接导致的长时间挂起。
 * **核心生命周期**：
-  * `start()`：初始化邮件连接配置；
+  * `start()`：向 Master 发送 `context.sendSplitRequest()` 索要工单；
   * `addSplits(List<ImapSplit> splits)`：接收分配给自己的工单，加入待处理列表；
   * `pollNext(ReaderOutput<RawEmail> output)`：
     * 建立网络短连接（支持 SOCKS5 代理挂载）；

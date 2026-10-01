@@ -193,10 +193,17 @@ public class ImapSourceReader implements SourceReader<RawEmail, ImapSplit> {
             }
 
             if (messages != null && messages.length > 0) {
+                // 🚀【性能王牌优化：正文整包预取】
+                // 传统 JavaMail 默认只抓信封，访问 msg.getContent() 时会产生 N 次网络阻塞往返；
+                // 此处强制注入 IMAPFolder.FetchProfileItem.MESSAGE 与 BODY[] 预取指令，
+                // 让 Gmail 服务器一次性将整批邮件的全部报文体 (Body/Header) 打包下发，将网络往返从 N 次压缩为 1 次！
                 FetchProfile fp = new FetchProfile();
                 fp.add(FetchProfile.Item.ENVELOPE);
                 fp.add(FetchProfile.Item.CONTENT_INFO);
-                fp.add(UIDFolder.FetchProfileItem.UID); // 预取真正的 IMAP UID
+                fp.add(UIDFolder.FetchProfileItem.UID);
+                if (folder instanceof com.sun.mail.imap.IMAPFolder) {
+                    fp.add(com.sun.mail.imap.IMAPFolder.FetchProfileItem.MESSAGE);
+                }
                 folder.fetch(messages, fp);
 
                 for (Message msg : messages) {

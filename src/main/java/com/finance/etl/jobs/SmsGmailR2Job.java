@@ -3,7 +3,7 @@ package com.finance.etl.jobs;
 import com.finance.etl.model.SmsRecord;
 import com.finance.etl.pipeline.SmsGmailR2Pipeline;
 import com.finance.etl.source.imap.ImapSource;
-import com.finance.etl.transform.SmsRecordParser;
+import com.finance.etl.transform.DemoEmailSubjectParser;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -32,11 +32,11 @@ public class SmsGmailR2Job {
         // 既充分压榨 NUC 的双核算力并行执行 Map/Sink 转换，又免除跨 Pod 的网络 IPC/Shuffle 开销，算完即焚彻底归还内存。
         env.setParallelism(2);
 
-        // 2. 组装实体对象 (FLIP-27 Source + Parser -> Pipeline)
+        // 2. 组装实体对象 (FLIP-27 Source + Demo Parser -> Pipeline)
         ImapSource source = ImapSource.fromConfig();
         LOG.info("📧 Configured Gmail IMAP Buffer Account: {}", source.getUser());
 
-        SmsRecordParser parser = new SmsRecordParser();
+        DemoEmailSubjectParser parser = new DemoEmailSubjectParser();
         SmsGmailR2Pipeline pipeline = new SmsGmailR2Pipeline(source, parser);
 
         // 3. 编排并挂载数据流

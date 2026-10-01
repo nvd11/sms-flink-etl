@@ -66,7 +66,7 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
         String password = ConfigUtils.get("GMAIL_IMAP_PASS", ConfigUtils.get("GMAIL_IMAP_PASSWORD", ""));
         String proxyHost = ConfigUtils.get("IMAP_PROXY_HOST");
         int proxyPort = ConfigUtils.getInt("IMAP_PROXY_PORT", 7890);
-        int maxBatchSize = ConfigUtils.getInt("IMAP_MAX_BATCH_SIZE", 20);
+        int maxBatchSize = ConfigUtils.getInt("IMAP_MAX_BATCH_SIZE", 200);
 
         return new ImapSource(host, port, user, password, proxyHost, proxyPort, maxBatchSize);
     }

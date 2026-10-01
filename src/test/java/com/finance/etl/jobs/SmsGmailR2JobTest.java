@@ -25,7 +25,27 @@ public class SmsGmailR2JobTest {
 
         PrintStream originalOut = System.out;
         ByteArrayOutputStream capturedOut = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(capturedOut));
+
+        // 仅在当前 JUnit 测试中实现双向分流 (TeeOutputStream): 既实时输出到屏幕，又捕获到内存用于断言
+        PrintStream teeOut = new PrintStream(new java.io.OutputStream() {
+            @Override
+            public void write(int b) {
+                originalOut.write(b);
+                capturedOut.write(b);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) {
+                originalOut.write(b, off, len);
+                capturedOut.write(b, off, len);
+            }
+
+            @Override
+            public void flush() {
+                originalOut.flush();
+            }
+        });
+        System.setOut(teeOut);
 
         String consoleOutput;
         try {
@@ -43,6 +63,15 @@ public class SmsGmailR2JobTest {
 
         LOG.info("✅ SmsGmailR2Job.main() executed cleanly without exceptions.");
         LOG.info("🔍 Captured console output length: {} characters", consoleOutput.length());
+
+        // 💥 直接使用真实 Logger 完整输出每一行解析出的 SmsRecord 数据
+        LOG.info("==================== [Extracted SmsRecords in Lakehouse Batch] ====================");
+        for (String line : consoleOutput.split("\n")) {
+            if (line.contains("SmsRecord")) {
+                LOG.info("📊 {}", line.trim());
+            }
+        }
+        LOG.info("====================================================================================");
 
         assertNotNull(consoleOutput, "控制台输出不应为空");
         assertTrue(consoleOutput.contains("SmsRecord"), "输出中必须包含 SmsRecord 实体输出");

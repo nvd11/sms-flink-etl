@@ -155,6 +155,7 @@ public class ImapSourceReaderTest {
         for (RawEmail email : emails) {
             LOG.info("  ✉️ [UID: {}, Subject: {}, Sender: {}, SentAt: {}]",
                     email.getImapUid(), email.getSubject(), email.getFrom(), email.getSentAt());
+            LOG.info("  📄 [Body Content Preview]: >>>{}<<<", email.getBody());
             assertNotNull(email.getImapUid(), "真实拉取的邮件必须带有 RFC 3501 永久 UID");
             assertNotNull(email.getMessageId(), "Message-ID 不能为空");
             assertNotNull(email.getBody(), "正文文本不能为空");

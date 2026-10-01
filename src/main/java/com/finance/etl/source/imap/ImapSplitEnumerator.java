@@ -10,10 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.*;
 
 /**
@@ -161,31 +157,20 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
 
     /**
      * 探查湖仓最新已同步的最高 UID 水位线 (从独立的 etl_sync_offsets 状态元表中读取)
+     * 架构说明：etl_sync_offsets 是存储于 Cloudflare R2 上的 Iceberg 湖仓表，
+     * 绝非 CockroachDB 元数据目录表。若未配置外部服务水位，默认返回 0L 走安全冷启动。
      */
     public long fetchLastSyncedImapUidFromLakehouse() {
-        String jdbcUri = ConfigUtils.get("ICEBERG_CATALOG_URI");
-        String jdbcUser = ConfigUtils.get("ICEBERG_CATALOG_USER");
-        String jdbcPassword = ConfigUtils.get("ICEBERG_CATALOG_PASSWORD");
-
-        if (jdbcUri == null || jdbcUri.trim().isEmpty() || !jdbcUri.startsWith("jdbc:")) {
-            LOG.info("ℹ️ [Lakehouse Offset] No Iceberg Catalog JDBC URI configured. Defaulting start UID to 0.");
-            return 0L;
-        }
-
-        String sql = "SELECT COALESCE(MAX(last_offset), 0) AS max_offset FROM etl_sync_offsets WHERE job_name = 'sms-gmail-r2' AND channel = 'EMAIL_IMAP'";
-        try (Connection conn = DriverManager.getConnection(jdbcUri, jdbcUser, jdbcPassword);
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-
-            if (rs.next()) {
-                long lastUid = rs.getLong("max_offset");
-                LOG.info("🌊 [Lakehouse Offset] Discovered highest synced offset from etl_sync_offsets: {}", lastUid);
-                return lastUid;
+        String configuredStartUid = ConfigUtils.get("IMAP_START_UID");
+        if (configuredStartUid != null && !configuredStartUid.trim().isEmpty()) {
+            try {
+                long uid = Long.parseLong(configuredStartUid.trim());
+                LOG.info("🌊 [Lakehouse Offset] Configured start UID from environment: {}", uid);
+                return uid;
+            } catch (NumberFormatException ignored) {
             }
-        } catch (Exception e) {
-            LOG.warn("⚠️ [Lakehouse Offset] Failed to query max offset from etl_sync_offsets ({}: {}). Defaulting to 0.",
-                    e.getClass().getSimpleName(), e.getMessage());
         }
+        LOG.info("ℹ️ [Lakehouse Offset] Defaulting start UID to 0L (Cold start mode).");
         return 0L;
     }
 
@@ -254,12 +239,12 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                     }
                 } else {
                     // 🌟 模式 B：首次冷启动模式 (Cold Start)
-                    // 水位为 0，拉取最近批次的未读 UNSEEN 邮件作为安全启动基线 (默认最多 30 封，防止首次拉取几万封老邮件撑爆)
-                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0). Probing unread UNSEEN messages...");
+                    // 水位为 0，拉取最近批次的未读 UNSEEN 邮件作为安全启动基线 (由 IMAP_MAX_BATCH_SIZE 配置驱动，杜绝硬编码)
+                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0). Probing unread UNSEEN messages (batch limit: {})...", maxBatchSize);
                     Message[] unreadMessages = inbox.search(new FlagTerm(new Flags(Flags.Flag.SEEN), false));
                     if (unreadMessages != null && unreadMessages.length > 0) {
                         int total = unreadMessages.length;
-                        int limit = Math.min(total, 30); // 首次冷启动最多取最新 30 封
+                        int limit = Math.min(total, maxBatchSize);
                         Message[] trimmed = Arrays.copyOfRange(unreadMessages, total - limit, total);
 
                         FetchProfile fp = new FetchProfile();

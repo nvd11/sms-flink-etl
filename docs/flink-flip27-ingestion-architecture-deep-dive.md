@@ -356,6 +356,13 @@ flowchart TD
 3. **`InputStatus.END_OF_INPUT`**：
    这是**批处理（Mode B） run-to-completion 生命周期的终点哨音**。当工单队列清空、内部缓冲区清空且 Master 已经下发 `noMoreSplits` 信号时触发。该信号向上逐级击穿调用链，促使 `SourceOperator` 触发 `finish()`，并顺流而下向紧邻的下游算子（FlatMap、Sink）广播结束标志，驱动整个 JobGraph 优雅走向 `FINISHED`。
 
+### 5.2 生产级网络吞吐与抗超时调优（双王牌策略）
+在公网 IMAP 邮件摄取实践中，传统 JavaMail 极易陷入两类性能深渊：
+1. **正文批量整包预取（消灭 N+1 次网络往返）**：
+   默认情况下，`folder.fetch(messages, fp)` 仅拉取信封元数据，当在循环中调用 `msg.getContent()` 时会产生多达 N 次同步网络阻塞。本架构强制在 `FetchProfile` 中追加 `IMAPFolder.FetchProfileItem.MESSAGE` 指令，命令服务端一次性下发整包，将多次跨洋请求压缩至单次 I/O，耗时从数十秒暴降至秒级；
+2. **连接超时与流控保护（消灭 10 秒死等）**：
+   通过 `ImapUtils` 统一将连接与读取超时调优至 5 秒（`timeout=5000`），启用 1MB 预取缓冲区（`fetchsize=1048576`）并禁用分段小包（`partialfetch=false`），彻底规避频繁小请求诱发的服务端限流与长时间挂起。
+
 ---
 
 ## 6. 生产级进阶：为什么 handleSplitRequest 带有 requesterHostname？

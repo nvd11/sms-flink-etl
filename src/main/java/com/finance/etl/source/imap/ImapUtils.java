@@ -17,6 +17,10 @@ public final class ImapUtils {
 
     /**
      * 统一构建 JavaMail IMAPS 核心连接配置 (TLS 加密与 SOCKS5 代理)
+     * 针对 Gmail 等高延迟远程公网进行了工业级网络流控调优：
+     * 1. 缩短读超时至 5 秒，快速感知重试，杜绝长时间假死挂起；
+     * 2. 扩容预取缓冲区至 1MB (fetchsize)，防止小包抖动；
+     * 3. 开启批量整包拉取 (partialfetch=false)，降低高频小包被风控掐线的概率。
      */
     public static Properties createImapsProperties(String host, int port, @Nullable String proxyHost, int proxyPort) {
         Properties props = new Properties();
@@ -24,8 +28,11 @@ public final class ImapUtils {
         props.put("mail.imaps.host", host);
         props.put("mail.imaps.port", String.valueOf(port));
         props.put("mail.imaps.ssl.enable", "true");
-        props.put("mail.imaps.connectiontimeout", "10000");
-        props.put("mail.imaps.timeout", "10000");
+        props.put("mail.imaps.connectiontimeout", "5000"); // 5秒建连超时
+        props.put("mail.imaps.timeout", "5000");           // 5秒读取超时
+        props.put("mail.imaps.fetchsize", "1048576");      // 1MB 预取流式缓冲区
+        props.put("mail.imaps.partialfetch", "false");     // 强制整包批量下载，避免高频交互
+        props.put("mail.imaps.ssl.socketFactory.fallback", "false");
 
         if (proxyHost != null && !proxyHost.trim().isEmpty()) {
             props.put("mail.imaps.socks.host", proxyHost.trim());
