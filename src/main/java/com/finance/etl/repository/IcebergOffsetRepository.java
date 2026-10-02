@@ -45,31 +45,10 @@ public class IcebergOffsetRepository implements Closeable {
     }
 
     /**
-     * 工厂方法：直接根据 .env / 系统环境变量自动装配并初始化仓储服务
+     * 工厂方法：利用统一的 IcebergCatalogFactory 自动装配并初始化仓储服务
      */
     public static IcebergOffsetRepository fromConfig() {
-        Configuration hadoopConf = new Configuration();
-        hadoopConf.set("fs.s3a.endpoint", ConfigUtils.get("R2_S3_ENDPOINT", ""));
-        hadoopConf.set("fs.s3a.access.key", ConfigUtils.get("R2_S3_ACCESS_KEY_ID", ""));
-        hadoopConf.set("fs.s3a.secret.key", ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", ""));
-        hadoopConf.set("fs.s3a.path.style.access", "true");
-        hadoopConf.set("fs.s3a.connection.ssl.enabled", "true");
-        hadoopConf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-        hadoopConf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"); // 兼容 s3:// 协议前缀
-        hadoopConf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
-
-        Map<String, String> properties = new HashMap<>();
-        properties.put("type", "jdbc");
-        properties.put("uri", ConfigUtils.get("ICEBERG_CATALOG_URI", ""));
-        properties.put("jdbc.user", ConfigUtils.get("ICEBERG_CATALOG_USER", ""));
-        properties.put("jdbc.password", ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", ""));
-        properties.put("warehouse", ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"));
-
-        String catalogName = ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance");
-        JdbcCatalog catalog = new JdbcCatalog();
-        catalog.setConf(hadoopConf);
-        catalog.initialize(catalogName, properties);
-
+        JdbcCatalog catalog = IcebergCatalogFactory.createJdbcCatalog();
         String schemaName = ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev");
         return new IcebergOffsetRepository(catalog, schemaName, "etl_sync_offsets");
     }

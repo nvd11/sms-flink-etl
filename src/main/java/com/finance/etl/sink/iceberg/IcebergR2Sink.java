@@ -1,6 +1,7 @@
 package com.finance.etl.sink.iceberg;
 
 import com.finance.etl.model.SyncOffset;
+import com.finance.etl.repository.IcebergCatalogFactory;
 import com.finance.etl.repository.IcebergOffsetRepository;
 import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -41,6 +42,20 @@ public class IcebergR2Sink implements Serializable {
     private final String tableName;
     private final int writeParallelism;
 
+    public IcebergR2Sink(String schemaName, String tableName, int writeParallelism) {
+        this.schemaName = Objects.requireNonNull(schemaName, "Schema name must not be null");
+        this.tableName = Objects.requireNonNull(tableName, "Table name must not be null");
+        this.writeParallelism = writeParallelism;
+        this.endpoint = ConfigUtils.get("R2_S3_ENDPOINT", "");
+        this.accessKey = ConfigUtils.get("R2_S3_ACCESS_KEY_ID", "");
+        this.secretKey = ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", "");
+        this.catalogUri = ConfigUtils.get("ICEBERG_CATALOG_URI", "");
+        this.catalogUser = ConfigUtils.get("ICEBERG_CATALOG_USER", "");
+        this.catalogPassword = ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", "");
+        this.warehouseDir = ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse");
+        this.catalogName = ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance");
+    }
+
     public IcebergR2Sink(String endpoint, String accessKey, String secretKey,
                          String catalogUri, String catalogUser, String catalogPassword,
                          String warehouseDir, String catalogName,
@@ -63,14 +78,6 @@ public class IcebergR2Sink implements Serializable {
      */
     public static IcebergR2Sink fromConfig() {
         return new IcebergR2Sink(
-                ConfigUtils.get("R2_S3_ENDPOINT", ""),
-                ConfigUtils.get("R2_S3_ACCESS_KEY_ID", ""),
-                ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", ""),
-                ConfigUtils.get("ICEBERG_CATALOG_URI", ""),
-                ConfigUtils.get("ICEBERG_CATALOG_USER", ""),
-                ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", ""),
-                ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"),
-                ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance"),
                 ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev"),
                 "raw_sms_records",
                 1 // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
@@ -89,37 +96,10 @@ public class IcebergR2Sink implements Serializable {
         LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={})...",
                 schemaName, tableName, writeParallelism);
 
-        // 1. 组装 Hadoop S3A 文件系统配置 (直连 Cloudflare R2)
-        Configuration hadoopConf = new Configuration();
-        hadoopConf.set("fs.s3a.endpoint", endpoint);
-        hadoopConf.set("fs.s3a.access.key", accessKey);
-        hadoopConf.set("fs.s3a.secret.key", secretKey);
-        hadoopConf.set("fs.s3a.path.style.access", "true");
-        hadoopConf.set("fs.s3a.connection.ssl.enabled", "true");
-        hadoopConf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
-        hadoopConf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"); // 🎯 兼容 s3:// 协议前缀
-        hadoopConf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        // 🎯 核心委托：底层 S3A 文件系统、JDBC Catalog 与 TableLoader 装配全部收敛于工厂单一真理源
+        TableLoader tableLoader = IcebergCatalogFactory.createTableLoader(schemaName, tableName);
 
-        // 2. 组装 JDBC CatalogLoader (CockroachDB iceberg-catalog 元数据中心)
-        Map<String, String> catalogProperties = new HashMap<>();
-        catalogProperties.put("type", "jdbc");
-        catalogProperties.put("uri", catalogUri);
-        catalogProperties.put("jdbc.user", catalogUser);
-        catalogProperties.put("jdbc.password", catalogPassword);
-        catalogProperties.put("warehouse", warehouseDir);
-
-        CatalogLoader catalogLoader = CatalogLoader.custom(
-                catalogName,
-                catalogProperties,
-                hadoopConf,
-                "org.apache.iceberg.jdbc.JdbcCatalog"
-        );
-
-        // 3. 动态载入目标表元数据
-        TableIdentifier tableId = TableIdentifier.of(schemaName, tableName);
-        TableLoader tableLoader = TableLoader.fromCatalog(catalogLoader, tableId);
-
-        // 4. 调用官方 FlinkSink，并显式锁定 writeParallelism(1)！返回 DataStreamSink 实例
+        // 调用官方 FlinkSink，并显式锁定 writeParallelism(1)！返回 DataStreamSink 实例
         DataStreamSink<Void> sink = FlinkSink.forRowData(rowStream)
                 .tableLoader(tableLoader)
                 .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
