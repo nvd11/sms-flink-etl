@@ -52,7 +52,12 @@ public class SmsGmailR2JobTest {
             LOG.info("▶️ Invoking SmsGmailR2Job.main(String[] args)...");
 
             assertDoesNotThrow(() -> {
-                SmsGmailR2Job.main(new String[]{});
+                try {
+                    SmsGmailR2Job.main(new String[]{});
+                } catch (Throwable t) {
+                    LOG.error("❌ Exception thrown in SmsGmailR2Job.main(): {}", t.getMessage(), t);
+                    throw t;
+                }
             }, "SmsGmailR2Job.main() 在本地执行时不应抛出任何异常");
 
             consoleOutput = capturedOut.toString();
