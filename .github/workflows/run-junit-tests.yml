@@ -35,7 +35,9 @@ jobs:
       - name: Inject .env Secrets
         run: |
           echo "${{ secrets.ENV_FILE }}" > .env
-          echo "✓ .env file created successfully from GitHub Secrets"
+          sed -i 's/R2_BUCKET_NAME=.*/R2_BUCKET_NAME=sms-flink-etl-dev/' .env
+          sed -i 's|ICEBERG_WAREHOUSE_DIR=s3a://sms-flink-etl/|ICEBERG_WAREHOUSE_DIR=s3a://sms-flink-etl-dev/|' .env
+          echo "✓ .env file created and configured for dev bucket (sms-flink-etl-dev)"
 
       - name: Run JUnit Tests
         id: test_step

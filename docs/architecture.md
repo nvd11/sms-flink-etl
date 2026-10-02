@@ -113,6 +113,20 @@
   * **绝对幂等入湖**：相同指纹与时间的短信无论重放多少次，在湖仓快照中自动完成原地版本替换与旧版本等值删除；
   * **读端零去重成本**：下游 Trino、Flink 查询端原生直接读取有效数据，无需任何手写 `ROW_NUMBER()` 去重算子。
 
+### ADR-011: 生产与开发双存储桶物理绝缘隔离策略 (sms-flink-etl vs sms-flink-etl-dev)
+* **背景**：
+  * 早期开发时，生产 (`finance`) 与开发测试 (`finance_dev`) 共享同一个 R2 Bucket `sms-flink-etl`，仅以子目录 Prefix 隔离；
+  * 随着生产正式上线，为防范高危误操作（如测试环境清桶或快照批量清理波及生产），必须建立金融级物理绝缘边界。
+* **决策**：
+  * 在 Cloudflare R2 开辟两个物理上完全独立的存储桶：
+    * **`sms-flink-etl`**：纯生产库专用（承载 `iceberg.finance` 真实动账数据）；
+    * **`sms-flink-etl-dev`**：开发与测试专用（承载 `iceberg.finance_dev` 单元测试与 CI 跑批）；
+  * `IcebergCatalogFactory` 与 `IcebergR2Sink` 依据当前 `ICEBERG_CATALOG_SCHEMA` 动态自适应绑定目标桶（`_dev` 结尾自动路由至 `sms-flink-etl-dev`）；
+  * 原生产桶中历史残留的 4MB `finance_dev` 快照数据予以物理清除。
+* **架构收益**：
+  * **企业级物理绝缘**：开发/CI/本地测试的任何读写、清空、快照回滚 100% 局限在 dev 桶，与生产零耦合；
+  * **合规与审计完备**：生产桶内不掺杂任何一条单元测试脏数据，保持 100% 纯正严肃的真实账单血统。
+
 ---
 
 ## 3. Flink 处理流水线与数仓分层设计

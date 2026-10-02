@@ -1,12 +1,12 @@
 -- ====================================================================
 -- Development & Test Environment DDL Specification for Apache Iceberg & Trino
 -- Schema: iceberg.finance_dev (Dedicated to Local Dev & JUnit Integration Tests)
--- Storage: Cloudflare R2 (Bucket: "sms-flink-etl" / Prefix: "iceberg/finance_dev")
+-- Storage: Cloudflare R2 (Bucket: "sms-flink-etl-dev" / Prefix: "iceberg/finance_dev")
 -- ====================================================================
 
--- 1. 创建本地开发与单测专用独立的 Schema (完全隔离生产 finance)
+-- 1. 创建本地开发与单测专用独立的 Schema (完全物理隔离生产 finance)
 CREATE SCHEMA IF NOT EXISTS iceberg.finance_dev
-WITH (location = 's3://sms-flink-etl/iceberg/finance_dev');
+WITH (location = 's3://sms-flink-etl-dev/iceberg/finance_dev');
 
 -- 2. 开发测试用 ODS 原始报文资产表
 CREATE TABLE IF NOT EXISTS iceberg.finance_dev.raw_sms_records (

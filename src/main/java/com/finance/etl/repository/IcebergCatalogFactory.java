@@ -58,7 +58,13 @@ public final class IcebergCatalogFactory {
         properties.put("uri", ConfigUtils.get("ICEBERG_CATALOG_URI", ""));
         properties.put("jdbc.user", ConfigUtils.get("ICEBERG_CATALOG_USER", ""));
         properties.put("jdbc.password", ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", ""));
-        properties.put("warehouse", ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"));
+
+        // 🎯 核心物理隔离：依据 Schema 环境动态自适应定位物理存储桶 (生产: sms-flink-etl, 开发: sms-flink-etl-dev)
+        String schema = ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+        String defaultBucket = schema.endsWith("_dev") ? "sms-flink-etl-dev" : "sms-flink-etl";
+        String defaultWarehouse = "s3a://" + defaultBucket + "/iceberg/warehouse";
+
+        properties.put("warehouse", ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", defaultWarehouse));
         return properties;
     }
 

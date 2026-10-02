@@ -60,7 +60,8 @@ public class IcebergR2Sink implements Serializable {
         this.catalogUri = ConfigUtils.get("ICEBERG_CATALOG_URI", "");
         this.catalogUser = ConfigUtils.get("ICEBERG_CATALOG_USER", "");
         this.catalogPassword = ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", "");
-        this.warehouseDir = ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse");
+        String defaultBucket = schemaName.endsWith("_dev") ? "sms-flink-etl-dev" : "sms-flink-etl";
+        this.warehouseDir = ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://" + defaultBucket + "/iceberg/warehouse");
         this.catalogName = ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance");
     }
 
