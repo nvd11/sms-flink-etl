@@ -6,7 +6,7 @@ on:
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
-        default: 'ghcr.io/nvd11/sms-flink-batch-etl:latest'
+        default: ''
 
 permissions:
   contents: read
@@ -34,32 +34,37 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
+          SSH_OPT="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectionAttempts=3"
+          run_ssh() {
+            ssh $SSH_OPT "${SSH_USER}@${SSH_HOST}" "$@"
+          }
+
           JOB_NAME="nuc-run-${RUN_ID}"
           echo "🚀 Preparing dispatch for Job: ${JOB_NAME}"
 
           # 2. 组装并执行拉起命令
           if [ -n "$OVERRIDE_IMAGE" ]; then
             echo "🎯 Overriding default image with: ${OVERRIDE_IMAGE}"
-            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
+            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
               | jq --arg img "${OVERRIDE_IMAGE}" '.spec.template.spec.containers[0].image = $img' \
-              | ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl apply -f -"
+              | run_ssh "sudo kubectl apply -f -"
           else
             echo "🎯 Using default baseline image defined in CronJob template"
-            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
+            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
           fi
           echo "✅ Job dispatched to K3s successfully!"
 
           # 4. 轮询等待 Job 执行完成并打印日志 (最多 180 秒)
           echo "⏳ Waiting for batch execution to complete on NUC..."
-          if ! ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=180s job/${JOB_NAME} -n batch-jobs"; then
+          if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=180s job/${JOB_NAME} -n batch-jobs"; then
             echo "❌ Job did not complete in time. Inspecting pod status and logs:"
-            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl describe pods -n batch-jobs -l job-name=${JOB_NAME} || true"
-            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100 || true"
+            run_ssh "sudo kubectl describe pods -n batch-jobs -l job-name=${JOB_NAME} || true"
+            run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100 || true"
             exit 1
           fi
 
           # 5. 获取 Pod 输出日志并记录到 Summary
-          LOGS=$(ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
+          LOGS=$(run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
           
           echo "### 📊 Batch Execution Logs on NUC Nova" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
