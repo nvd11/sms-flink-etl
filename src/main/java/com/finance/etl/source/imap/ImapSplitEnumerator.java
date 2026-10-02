@@ -246,17 +246,25 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
 
                 // 🎯 核心架构判定：根据水位状态选择检索策略
                 if (lastSyncedUid > 0) {
-                    // 🌟 模式 A：严密增量模式 (Watermark-Driven)
+                    // 🌟 模式 A：严密增量模式 (Watermark-Driven · EARLIEST_FIRST 顺推)
                     // 只要 UID > 上次同步水位，无论用户是否在手机上误点为“已读”，通通精准捕获，绝不漏单！
-                    LOG.info("🌊 [JobManager Master] Using Incremental Watermark Mode. Fetching all messages with UID > {}...", lastSyncedUid);
+                    // 单批次按时间正序截取最多 maxBatchSize 封，保证平稳追赶，杜绝超大批次 OOM。
+                    LOG.info("🌊 [JobManager Master] Using Incremental Watermark Mode. Fetching messages with UID > {} (batch limit: {})...",
+                            lastSyncedUid, maxBatchSize);
                     Message[] incrementalMessages = uidFolder.getMessagesByUID(lastSyncedUid + 1, UIDFolder.MAXUID);
 
                     if (incrementalMessages != null && incrementalMessages.length > 0) {
+                        int total = incrementalMessages.length;
+                        int limit = Math.min(total, maxBatchSize);
+                        // 正向截取：取按时间最早的前 limit 封消息，平稳推进水位
+                        Message[] batchMessages = (total > limit) ?
+                                Arrays.copyOfRange(incrementalMessages, 0, limit) : incrementalMessages;
+
                         FetchProfile fp = new FetchProfile();
                         fp.add(UIDFolder.FetchProfileItem.UID);
-                        inbox.fetch(incrementalMessages, fp);
+                        inbox.fetch(batchMessages, fp);
 
-                        for (Message msg : incrementalMessages) {
+                        for (Message msg : batchMessages) {
                             long uid = uidFolder.getUID(msg);
                             if (uid > lastSyncedUid) {
                                 uids.add(uid);
@@ -264,23 +272,22 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                         }
                     }
                 } else {
-                    // 🌟 模式 B：首次冷启动模式 (Cold Start / Initial Sync)
+                    // 🌟 模式 B：首次冷启动模式 (Cold Start / Initial Sync · EARLIEST_FIRST 正向全量补录)
                     // 湖仓尚无已落盘水位 (lastSyncedUid == 0)。
-                    // 严格坚守“彻底无视已读未读”架构铁律：严禁在服务端发起昂贵的 search(UNSEEN) 全箱搜索！
-                    // 直接基于物理序号截取收件箱中最新的 maxBatchSize 封邮件（纯内存指针截取，0 搜索网络开销），
-                    // 既保证拉取最新一批动账短信，又彻底消灭了长达 14 秒的服务端遍历延迟。
+                    // 严格坚守 EARLIEST_FIRST 正向补录原则：从收件箱第 1 封历史邮件开始正向抽取，单批上限为 maxBatchSize。
+                    // 配合定时调度，流水线会自动平稳追赶 (1~200 -> 201~400 -> ...)，全量历史短信一封不漏！
                     int totalCount = inbox.getMessageCount();
-                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0, total inbox messages: {}). Fetching latest batch (limit: {})...",
-                            totalCount, maxBatchSize);
-                    if (totalCount > 0) {
-                        int start = Math.max(1, totalCount - maxBatchSize + 1);
-                        Message[] latestMessages = inbox.getMessages(start, totalCount);
+                    int end = Math.min(totalCount, maxBatchSize);
+                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0, total inbox messages: {}). Fetching earliest batch from 1 to {} (limit: {})...",
+                            totalCount, end, maxBatchSize);
+                    if (totalCount > 0 && end >= 1) {
+                        Message[] earliestMessages = inbox.getMessages(1, end);
 
                         FetchProfile fp = new FetchProfile();
                         fp.add(UIDFolder.FetchProfileItem.UID);
-                        inbox.fetch(latestMessages, fp);
+                        inbox.fetch(earliestMessages, fp);
 
-                        for (Message msg : latestMessages) {
+                        for (Message msg : earliestMessages) {
                             uids.add(uidFolder.getUID(msg));
                         }
                     }
