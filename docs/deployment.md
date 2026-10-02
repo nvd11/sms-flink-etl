@@ -67,7 +67,7 @@
 * **调度器名称**: `test-sms-flink-cron` (ARN: `arn:aws:scheduler:ap-southeast-1:186004631963:schedule/default/test-sms-flink-cron`)
 * **时区**: `Asia/Shanghai`（原生北京时间）
 * **触发目标 (Target)**: 调用 GitHub 官方工作流触发 API
-  * **目标 URL**: `https://api.github.com/repos/nvd11/sms-flink-etl/actions/workflows/trigger-nuc-etl.yml/dispatches`
+  * **目标 URL**: `https://api.github.com/repos/nvd11/sms-flink-etl/actions/workflows/trigger-nuc-batch-runner.yml/dispatches`
   * **HTTP Method**: `POST`
   * **Headers**:
     * `Accept: application/vnd.github+json`
@@ -79,7 +79,7 @@
     }
     ```
 
-### 2.2 GitHub Actions 调度中枢工作流 (`.github/workflows/trigger-nuc-etl.yml`)
+### 2.2 GitHub Actions 调度中枢工作流 (`.github/workflows/trigger-nuc-batch-runner.yml`)
 ```yaml
 name: SMS Flink Batch Orchestration Runner
 
