@@ -1,4 +1,4 @@
-package com.finance.etl.sink.iceberg;
+package com.finance.etl.repository;
 
 import com.finance.etl.model.SyncOffset;
 import com.finance.etl.util.ConfigUtils;
@@ -29,7 +29,7 @@ import java.util.*;
  * 职责：专职负责 etl_sync_offsets 表的增量水位读取与推进闭环。
  * 1. 启动时：通过 Iceberg 原生只读接口 (IcebergGenerics) 毫秒级直读 R2 湖仓中的最新 UID 水位；
  * 2. 跑完时：通过 Iceberg 官方写入与 Snapshot CAS 提交机制，原子追加本次成功消费的最大水位位点。
- * 彻底解耦 Flink 批处理调度总管与外部查询引擎 (0 Trino 依赖、0 阻塞死锁)。
+ * 独立收敛于 repository 包，彻底解耦 Source 读端与 Sink 写端 (0 跨层依赖倒挂，0 Trino 依赖)。
  */
 public class IcebergOffsetRepository implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(IcebergOffsetRepository.class);

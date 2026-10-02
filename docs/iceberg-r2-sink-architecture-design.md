@@ -113,8 +113,10 @@ com.finance.etl
 │
 ├── sink.iceberg                        <-- [湖仓写端专职包]
 │   ├── SmsRecordToRowDataMapper.java   # 【工序①】类型投影：SmsRecord (POJO) -> RowData
-│   ├── IcebergOffsetRepository.java   # 【工序②】湖仓元数据仓储：etl_sync_offsets 增量水位读写闭环
-│   └── IcebergR2Sink.java              # 【工序③】写端门面实体：组装 S3A、Catalog 并返回 DataStreamSink
+│   └── IcebergR2Sink.java              # 【工序②】写端门面实体：组装 S3A、Catalog 并返回 DataStreamSink
+│
+├── repository                          <-- [湖仓元数据仓储层]
+│   └── IcebergOffsetRepository.java    # 【工序③】共享仓储：etl_sync_offsets 增量水位读写闭环 (解耦读写双端)
 │
 ├── pipeline
 │   └── SmsGmailR2Pipeline.java         # 【工序④】总图编排：将 Source -> Parser -> Sink 装配成完整 DAG

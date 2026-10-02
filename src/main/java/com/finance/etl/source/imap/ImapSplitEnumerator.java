@@ -193,8 +193,8 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
         }
 
         // 🎯 核心闭环：通过独立的 IcebergOffsetRepository 毫秒级直读 etl_sync_offsets 湖仓元数据表
-        try (com.finance.etl.sink.iceberg.IcebergOffsetRepository offsetRepo =
-                     com.finance.etl.sink.iceberg.IcebergOffsetRepository.fromConfig()) {
+        try (com.finance.etl.repository.IcebergOffsetRepository offsetRepo =
+                     com.finance.etl.repository.IcebergOffsetRepository.fromConfig()) {
             long uid = offsetRepo.getLatestOffset("sms-gmail-r2", "EMAIL_IMAP", user);
             if (uid > 0L) {
                 LOG.info("🌊 [Lakehouse Offset] Discovered latest synced UID from Iceberg table: {}", uid);

@@ -1,4 +1,4 @@
-package com.finance.etl.sink.iceberg;
+package com.finance.etl.repository;
 
 import com.finance.etl.model.SyncOffset;
 import com.finance.etl.util.ConfigUtils;

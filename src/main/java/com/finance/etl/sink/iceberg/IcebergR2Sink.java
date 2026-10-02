@@ -1,6 +1,7 @@
 package com.finance.etl.sink.iceberg;
 
 import com.finance.etl.model.SyncOffset;
+import com.finance.etl.repository.IcebergOffsetRepository;
 import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;

@@ -191,11 +191,13 @@ com.finance.etl
 ├── sink                <-- [湖仓/落地存储层 / Sink] 开放表格与对象存储直连
 │   ├── iceberg                   # Apache Iceberg 湖仓专属子包
 │   │   ├── IcebergR2Sink.java          # Cloudflare R2 Iceberg 湖仓追加 Sink 门面实体 (实现 append 返回 DataStreamSink)
-│   │   ├── IcebergOffsetRepository.java# 增量水位元数据仓储服务 (etl_sync_offsets 直读与原子追加闭环)
 │   │   └── SmsRecordToRowDataMapper.java# 纯函数列式映射器 (SmsRecord -> GenericRowData)
 │   │
 │   └── file                      # [未来扩展示例] 物理文件清理 / 冷归档 Sink
 │       └── FileDeletionSink.java       # 视频文件物理删除 / 冷归档 Sink
+│
+├── repository          <-- [湖仓元数据仓储层 / Repository] 共享元数据与水位状态持久化
+│   └── IcebergOffsetRepository.java    # 增量水位仓储服务 (etl_sync_offsets 直读与原子追加闭环，解耦读写双端)
 │
 ├── model               <-- [领域模型层] 核心 DTO 与 Lakehouse ODS 物理表模型
 │   ├── RawEmail.java             # 邮件协议原始 DTO
@@ -215,7 +217,8 @@ com.finance.etl
 | **`pipeline`** | `SmsGmailR2Pipeline`<br>`VideoCleanupPipeline` | 计算拓扑编排器 (DAG Orchestrator) | 持有 `source`、`transform` 及 `sink` 实例，负责组装 Flink `DataStream` 算子拓扑、空数据心跳保活及异常兜底。 | 高内聚，脱离静态入口，天然支持在测试中注入 Mock 组件执行拓扑验证。 |
 | **`source`** | `source.imap.*`<br>`source.video.*` | 数据源连接器 (FLIP-27 Connector) | 按协议/介质独立子包。内部严格遵循 FLIP-27 规范，分离 `SplitEnumerator`（Master 调度）与 `SourceReader`（Worker 读取），通过 `SplitSerializer` 完成网络传输。 | 独立子包物理隔离，新增视频/文件等数据源对原有代码 0 侵入。 |
 | **`transform`** | `DemoEmailSubjectParser`<br>`VideoRetentionFilter` | 业务解析实体 (Domain Transformer) | 实现具体的业务清洗、正则解析、过期策略判断或模型转换。 | 纯业务逻辑，实现 `Serializable`，直接作为 Flink 函数算子复用。 |
-| **`sink`** | `IcebergR2Sink`<br>`IcebergOffsetRepository` | 湖仓写端实体与元数据仓储 (Lakehouse Sink & Repo) | 封装目标存储协议（Cloudflare R2 S3A 认证、Iceberg Commit），提供 `append()` 挂载写流，提供水位闭环读写。 | 隔离复杂的外部存储认证与底层连接池配置。 |
+| **`sink`** | `IcebergR2Sink`<br>`FileDeletionSink` | 落地存储门面实体 (Lakehouse / Action Sink) | 封装目标存储协议（Cloudflare R2 S3A 认证、Iceberg Commit），提供 `append()` 挂载写流。 | 隔离复杂的外部存储认证与底层连接池配置。 |
+| **`repository`** | `IcebergOffsetRepository` | 元数据仓储服务 (State / Watermark Repository) | 封装对元数据表 `etl_sync_offsets` 的读取与写入，作为共享领域基础设施同时服务于 Source（读位点）与 Sink（推位点）。 | 彻底根除 Source 读端反向 import Sink 写端的架构倒挂。 |
 
 ### 4.3 架构收益与多作业演进红利
 1. **开闭原则（OCP）终极落地**：
