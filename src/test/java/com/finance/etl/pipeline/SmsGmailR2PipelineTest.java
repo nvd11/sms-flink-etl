@@ -2,7 +2,7 @@ package com.finance.etl.pipeline;
 
 import com.finance.etl.model.SmsRecord;
 import com.finance.etl.source.imap.ImapSource;
-import com.finance.etl.transform.SmsRecordParser;
+import com.finance.etl.transform.SmsEmailParser;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -27,7 +27,7 @@ public class SmsGmailR2PipelineTest {
         env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         env.setParallelism(2);
 
-        SmsRecordParser parser = new SmsRecordParser();
+        SmsEmailParser parser = new SmsEmailParser();
         ImapSource source = ImapSource.builder()
                 .host("imap.gmail.com")
                 .port(993)

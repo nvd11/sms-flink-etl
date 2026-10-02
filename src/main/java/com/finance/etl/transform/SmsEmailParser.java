@@ -17,21 +17,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 管道化动账报文解析算子 (DemoEmailSubjectParser)
- * 职责：纯函数管道总调度器。
- * 1. 遍历装配好的 SmsFieldExtractor 提取器族，将返回的 Map 字段字典自动聚合规整为 SmsRecord 实体；
- * 2. 挂载分布式累加器 (LongMaximum: "max-processed-uid")，零额外 I/O 感知批次全局最大 UID，供 Sink 后置推进水位。
+ * 金融动账邮件标准解析算子 (SmsEmailParser)
+ * 职责：纯函数式管道总调度器。
+ * 1. 编排并遍历装配好的 SmsFieldExtractor 提取器族，将返回的 Map 字段字典自动聚合规整为 SmsRecord 领域实体；
+ * 2. 挂载 Flink 原生分布式累加器 (LongMaximum: "max-processed-uid")，零额外 I/O 感知批次全局最大 UID，供 Sink 后置推进水位。
  */
-public class DemoEmailSubjectParser extends RichFlatMapFunction<RawEmail, SmsRecord> implements Serializable {
+public class SmsEmailParser extends RichFlatMapFunction<RawEmail, SmsRecord> implements Serializable {
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(DemoEmailSubjectParser.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SmsEmailParser.class);
 
     public static final String ACCUMULATOR_MAX_UID = "max-processed-uid";
 
     private final List<SmsFieldExtractor> extractors;
     private final LongMaximum maxUidTracker = new LongMaximum();
 
-    public DemoEmailSubjectParser() {
+    public SmsEmailParser() {
         this.extractors = List.of(
                 new RawBodyExtractor(),
                 new SenderExtractor(),
@@ -40,7 +40,7 @@ public class DemoEmailSubjectParser extends RichFlatMapFunction<RawEmail, SmsRec
         );
     }
 
-    public DemoEmailSubjectParser(List<SmsFieldExtractor> extractors) {
+    public SmsEmailParser(List<SmsFieldExtractor> extractors) {
         this.extractors = extractors != null ? extractors : List.of();
     }
 

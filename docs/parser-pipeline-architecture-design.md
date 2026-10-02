@@ -29,7 +29,7 @@
    - 输入：只读不可变的 `RawEmail`；
    - 输出：标准的不可变字典映射 `Map<String, Object>`；
    - 无任何外部状态依赖，无副作用，各 Extractor 可独立演进、并发执行与极速单测。
-2. **算子编排与汇聚层 (`DemoEmailSubjectParser`)**：
+2. **算子编排与汇聚层 (`SmsEmailParser`)**：
    - 作为 Flink 原生 `FlatMapFunction`，维护提取器链条并依次调用各纯函数提取器；
    - 将所有提取出的 Map 条目自动汇总，并通过属性分发器动态规整并赋给 `SmsRecord`。
 
@@ -64,7 +64,7 @@ classDiagram
         +extract(RawEmail email) Map~String, Object~
     }
 
-    class DemoEmailSubjectParser {
+    class SmsEmailParser {
         -List~SmsFieldExtractor~ extractors
         +flatMap(email, collector)
     }
@@ -75,7 +75,7 @@ classDiagram
     SmsFieldExtractor <|.. SimSlotExtractor : implements
     SmsFieldExtractor <|.. FingerprintExtractor : implements
 
-    DemoEmailSubjectParser o--> SmsFieldExtractor : orchestrates
+    SmsEmailParser o--> SmsFieldExtractor : orchestrates
 ```
 
 ---
@@ -185,7 +185,7 @@ flowchart TD
 
 ---
 
-## 5. 调度容器与装配实现 (`DemoEmailSubjectParser`)
+## 5. 调度容器与装配实现 (`SmsEmailParser`)
 
 调度容器仅作为 Flink 算子适配器，循环遍历纯函数提取器，获取各个 `Map<String, Object>`，汇总并自动规整实体：
 
@@ -207,11 +207,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 管道化动账报文解析算子 (DemoEmailSubjectParser)
+ * 管道化动账报文解析算子 (SmsEmailParser)
  */
-public class DemoEmailSubjectParser implements FlatMapFunction<RawEmail, SmsRecord>, Serializable {
+public class SmsEmailParser implements FlatMapFunction<RawEmail, SmsRecord>, Serializable {
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(DemoEmailSubjectParser.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SmsEmailParser.class);
 
     private final List<SmsFieldExtractor> extractors = List.of(
             new RawBodyExtractor(),

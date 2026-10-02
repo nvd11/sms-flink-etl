@@ -41,7 +41,7 @@ flowchart LR
 
     subgraph ProcessSide["计算清洗拓扑 (Transform)"]
         direction TB
-        Parser["DemoEmailSubjectParser<br/>(管道化纯函数清洗 · SHA-256 指纹)"]
+        Parser["SmsEmailParser<br/>(管道化纯函数清洗 · SHA-256 指纹)"]
     end
 
     subgraph WriteSide["FLIP-143/191 写端拓扑 (Sink)"]
@@ -73,7 +73,7 @@ flowchart LR
         └── (2/2) Worker Slot 1 [拉取 100 封] ──┤
                                                 │
                                                 ▼  
-                     [ DemoEmailSubjectParser 实体清洗 & SHA-256 提取 ] (并发度 = 2)
+                     [ SmsEmailParser 实体清洗 & SHA-256 提取 ] (并发度 = 2)
                                                 │
                                                 │  (本地内存轻量汇聚 Forward)
                                                 ▼  
@@ -369,7 +369,7 @@ public DataStreamSink<?> assembleAndAttachSink(StreamExecutionEnvironment env, I
        (处理 UID 239 ~ 332)                    (处理 UID 333 ~ 438)
                  │                                       │
                  ▼                                       ▼
-    【DemoEmailSubjectParser】              【DemoEmailSubjectParser】
+    【SmsEmailParser】              【SmsEmailParser】
    ┌───────────────────────────┐           ┌───────────────────────────┐
    │ 业务数据: 吐出 SmsRecord   │           │ 业务数据: 吐出 SmsRecord   │
    │ 监控通道: maxUid.add(id)  │           │ 监控通道: maxUid.add(id)  │
@@ -397,7 +397,7 @@ public DataStreamSink<?> assembleAndAttachSink(StreamExecutionEnvironment env, I
 ```
 
 1. **Parser 端注册与递增**：
-   `DemoEmailSubjectParser` 继承 `RichFlatMapFunction`，在 `open()` 中向运行时注册 `getRuntimeContext().addAccumulator("max-processed-uid", maxUidTracker)`。每有一条记录经过，顺手调用 `maxUidTracker.add(record.getId())`，0 额外 I/O 成本；
+   `SmsEmailParser` 继承 `RichFlatMapFunction`，在 `open()` 中向运行时注册 `getRuntimeContext().addAccumulator("max-processed-uid", maxUidTracker)`。每有一条记录经过，顺手调用 `maxUidTracker.add(record.getId())`，0 额外 I/O 成本；
 2. **引擎自动汇聚**：
    批处理结束时，Flink JobManager 自动将所有 Worker 的局部最大值归约合并（`Math.max`）；
 3. **主作业安全卡口提交**：

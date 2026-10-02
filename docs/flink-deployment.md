@@ -33,7 +33,7 @@
 |  - 算力限制: Requests 500m/1Gi · Limits 2000m/2Gi (JVM 堆 -Xmx1536m)        |
 |  - 算子流水 (漏斗形并发拓扑):                                                |
 |    1. ImapSource: FLIP-27 标准连接器 (P=2 并发拉取邮件)                       |
-|    2. DemoEmailSubjectParser: 管道化纯函数清洗 & SHA-256 指纹提取 (P=2)         |
+|    2. SmsEmailParser: 管道化纯函数清洗 & SHA-256 指纹提取 (P=2)         |
 |    3. IcebergBatchSink: writeParallelism=1 单写收敛 (消灭小文件碎片)           |
 |  - 执行形态: 耗时 10~20 秒，处理完成正常退出并回收所有内存资源               |
 +─────────────────────────────────────────┬───────────────────────────────────+

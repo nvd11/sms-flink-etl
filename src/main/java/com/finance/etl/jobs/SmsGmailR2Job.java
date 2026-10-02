@@ -4,7 +4,7 @@ import com.finance.etl.model.SmsRecord;
 import com.finance.etl.pipeline.SmsGmailR2Pipeline;
 import com.finance.etl.sink.iceberg.IcebergR2Sink;
 import com.finance.etl.source.imap.ImapSource;
-import com.finance.etl.transform.DemoEmailSubjectParser;
+import com.finance.etl.transform.SmsEmailParser;
 import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -51,7 +51,7 @@ public class SmsGmailR2Job {
         ImapSource source = ImapSource.fromConfig();
         LOG.info("📧 Configured Gmail IMAP Buffer Account: {}", source.getUser());
 
-        DemoEmailSubjectParser parser = new DemoEmailSubjectParser();
+        SmsEmailParser parser = new SmsEmailParser();
         IcebergR2Sink sink = IcebergR2Sink.fromConfig();
         SmsGmailR2Pipeline pipeline = new SmsGmailR2Pipeline(source, parser, sink);
 
@@ -69,7 +69,7 @@ public class SmsGmailR2Job {
         JobExecutionResult executionResult = env.execute("SMS-Gmail-R2-Lakehouse-Batch-Job");
 
         // 5. 提交水位位点 (步骤 2：作业 100% 成功后，从分布式累加器提取最大 UID 推进水位，严格保障 At-Least-Once)
-        Long maxUid = executionResult.getAccumulatorResult(DemoEmailSubjectParser.ACCUMULATOR_MAX_UID);
+        Long maxUid = executionResult.getAccumulatorResult(SmsEmailParser.ACCUMULATOR_MAX_UID);
         LOG.info("🌊 [Job Completion] Batch executed successfully. Global MAX(UID) from accumulator: {}", maxUid);
         sink.commitOffset("sms-gmail-r2", "EMAIL_IMAP", source.getUser(), maxUid != null ? maxUid : 0L);
 

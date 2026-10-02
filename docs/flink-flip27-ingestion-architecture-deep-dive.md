@@ -38,8 +38,8 @@ graph TB
     end
 
     subgraph Downstream[下游计算算子]
-        Pipe0["SmsRecordParser-FlatMap<br/>(数据清洗与解析)"]
-        Pipe1["SmsRecordParser-FlatMap<br/>(数据清洗与解析)"]
+        Pipe0["SmsEmailParser-FlatMap<br/>(数据清洗与解析)"]
+        Pipe1["SmsEmailParser-FlatMap<br/>(数据清洗与解析)"]
     end
 
     %% 索单与派单流向
@@ -404,8 +404,8 @@ flowchart TB
     subgraph SourceStage["1. 数据源与清洗阶段 (Parallelism = 2)"]
         S0["Worker Slot 0:<br/>ImapSourceReader (100 UIDs)"]
         S1["Worker Slot 1:<br/>ImapSourceReader (100 UIDs)"]
-        P0["DemoEmailSubjectParser (Slot 0)"]
-        P1["DemoEmailSubjectParser (Slot 1)"]
+        P0["SmsEmailParser (Slot 0)"]
+        P1["SmsEmailParser (Slot 1)"]
         S0 --> P0
         S1 --> P1
     end

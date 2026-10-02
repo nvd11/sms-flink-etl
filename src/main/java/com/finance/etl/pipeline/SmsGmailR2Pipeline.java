@@ -59,7 +59,7 @@ public class SmsGmailR2Pipeline {
         // 2. 挂载抽象业务清洗算子 (由 Parser 内部负责规整与实体日志记录)
         return emailStream
                 .flatMap(parser)
-                .name("SmsRecordParser-FlatMap");
+                .name("SmsEmailParser-FlatMap");
     }
 
     /**

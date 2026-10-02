@@ -95,7 +95,7 @@
   * 若在 Flink 流图内部同时挂载两个 Sink（一个写业务表，一个写水位表），由于两张独立的 Iceberg 表缺乏跨表 2PC 分布式事务，一旦水位表先提交成功而数据表写入崩溃，将引发“水位超前推进、真实短信永久漏拉”的致命金融级缺陷；
   * 同时，数据流式流动时，算子在未接收到 `END_OF_INPUT` 前无法知晓全局最大 UID。
 * **决策**：
-  1. **算子层轻量感知**：`DemoEmailSubjectParser` 继承 `RichFlatMapFunction`，挂载 Flink 官方分布式累加器 `LongMaximum("max-processed-uid")`，多 Worker 并发比对本批次最大 UID，0 额外 I/O；
+  1. **算子层轻量感知**：`SmsEmailParser` 继承 `RichFlatMapFunction`，挂载 Flink 官方分布式累加器 `LongMaximum("max-processed-uid")`，多 Worker 并发比对本批次最大 UID，0 额外 I/O；
   2. **作业后置严格卡口**：只有当 `env.execute()` 100% 成功返回后，主线程才从 `JobExecutionResult` 提取最终的全局 `maxUid`，最后调用 `sink.commitOffset(...)` 推进水位。
 * **架构收益**：
   * **金融级 At-Least-Once 保障**：数据没落稳，水位绝对不推进；任何网络或节点崩溃触发重跑时天然幂等重拉；
@@ -116,7 +116,7 @@
 [ ImapSource (Worker Slot 0 / 1) ] (批量整包预取 · 双工位并发拉取邮件)
               │
               ▼  (并发清洗与指纹提取 · Parallelism = 2)
-[ DemoEmailSubjectParser ] (管道化纯函数清洗 · SHA-256 业务唯一指纹)
+[ SmsEmailParser ] (管道化纯函数清洗 · SHA-256 业务唯一指纹)
               │
               ▼  (本地内存轻量汇聚 Forward)
 [ IcebergBatchSink (Writer) ] ── (writeParallelism = 1 · 消除小文件碎片，单包 Parquet)
@@ -184,8 +184,8 @@ com.finance.etl
 │       └── VideoFileSplit.java       # 目录/文件块分片工单
 │
 ├── transform           <-- [业务清洗层 / Transform] 业务规则、实体映射与防重指纹
-│   ├── SmsRecordParser.java      # 邮件元数据解析与动账凭证提炼
-│   ├── RawRecordFormatter.java   # 辅助算子：字符串规整与历史兼容算子
+│   ├── SmsEmailParser.java       # 邮件元数据解析与动账凭证提炼 (编排纯函数提取器 + 累加器追踪)
+│   ├── extractor                 # 模块化纯函数字段提取器 (Sender, Subject, Amount, Fingerprint 等)
 │   └── VideoRetentionFilter.java # [未来扩展示例] 视频过期策略过滤算子 (如保留7天)
 │
 ├── sink                <-- [湖仓/落地存储层 / Sink] 开放表格与对象存储直连
@@ -216,7 +216,7 @@ com.finance.etl
 | **`jobs`** | `SmsGmailR2Job`<br>`VideoCleanupJob` | 作业驱动入口 (Main Driver) | 负责命令行参数解析、Flink 执行环境初始化（BATCH 模式、并发度）、通过工厂实例化组件并调用 `env.execute()`。 | 极简，无任何静态业务实现，专注于应用生命周期控制。 |
 | **`pipeline`** | `SmsGmailR2Pipeline`<br>`VideoCleanupPipeline` | 计算拓扑编排器 (DAG Orchestrator) | 持有 `source`、`transform` 及 `sink` 实例，负责组装 Flink `DataStream` 算子拓扑、空数据心跳保活及异常兜底。 | 高内聚，脱离静态入口，天然支持在测试中注入 Mock 组件执行拓扑验证。 |
 | **`source`** | `source.imap.*`<br>`source.video.*` | 数据源连接器 (FLIP-27 Connector) | 按协议/介质独立子包。内部严格遵循 FLIP-27 规范，分离 `SplitEnumerator`（Master 调度）与 `SourceReader`（Worker 读取），通过 `SplitSerializer` 完成网络传输。 | 独立子包物理隔离，新增视频/文件等数据源对原有代码 0 侵入。 |
-| **`transform`** | `DemoEmailSubjectParser`<br>`VideoRetentionFilter` | 业务解析实体 (Domain Transformer) | 实现具体的业务清洗、正则解析、过期策略判断或模型转换。 | 纯业务逻辑，实现 `Serializable`，直接作为 Flink 函数算子复用。 |
+| **`transform`** | `SmsEmailParser`<br>`VideoRetentionFilter` | 业务解析实体 (Domain Transformer) | 实现具体的业务清洗、正则解析、过期策略判断或模型转换。 | 纯业务逻辑，实现 `Serializable`，直接作为 Flink 函数算子复用。 |
 | **`sink`** | `IcebergR2Sink`<br>`FileDeletionSink` | 落地存储门面实体 (Lakehouse / Action Sink) | 封装目标存储协议（Cloudflare R2 S3A 认证、Iceberg Commit），提供 `append()` 挂载写流。 | 隔离复杂的外部存储认证与底层连接池配置。 |
 | **`repository`** | `IcebergOffsetRepository` | 元数据仓储服务 (State / Watermark Repository) | 封装对元数据表 `etl_sync_offsets` 的读取与写入，作为共享领域基础设施同时服务于 Source（读位点）与 Sink（推位点）。 | 彻底根除 Source 读端反向 import Sink 写端的架构倒挂。 |
 

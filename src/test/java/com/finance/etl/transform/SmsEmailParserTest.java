@@ -12,13 +12,13 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("DemoEmailSubjectParser 管道总调度单元测试")
-class DemoEmailSubjectParserTest {
+@DisplayName("SmsEmailParser 管道总调度单元测试")
+class SmsEmailParserTest {
 
     @Test
     @DisplayName("应该成功驱动四大提取器并组装出完整 SmsRecord 实体")
     void shouldExtractAllFieldsAndEmitEnrichedRecord() throws Exception {
-        DemoEmailSubjectParser parser = new DemoEmailSubjectParser();
+        SmsEmailParser parser = new SmsEmailParser();
 
         RawEmail email = new RawEmail();
         email.setImapUid(999L);
@@ -55,7 +55,7 @@ class DemoEmailSubjectParserTest {
     @Test
     @DisplayName("空邮件输入时应安全跳过且不产生记录")
     void shouldHandleNullEmailSafely() throws Exception {
-        DemoEmailSubjectParser parser = new DemoEmailSubjectParser();
+        SmsEmailParser parser = new SmsEmailParser();
         List<SmsRecord> collected = new ArrayList<>();
         Collector<SmsRecord> testCollector = new Collector<>() {
             @Override
