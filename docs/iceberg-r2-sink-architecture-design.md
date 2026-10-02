@@ -284,14 +284,44 @@ public class IcebergR2Sink implements Serializable {
         TableLoader tableLoader = TableLoader.fromCatalog(catalogLoader, tableId);
 
         // 4. 调用官方 FlinkSink，并锁定 writeParallelism！返回 DataStreamSink 实例
-        DataStreamSink<RowData> sink = FlinkSink.forRowData(rowStream)
+        DataStreamSink<Void> sink = FlinkSink.forRowData(rowStream)
                 .tableLoader(tableLoader)
-                .hadoopConf(hadoopConf)
                 .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
                 .append();
 
         LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
         return sink;
+    }
+
+    /**
+     * 步骤 2：推进水位表 (只有在批处理作业 env.execute() 彻底成功后才被触发)
+     *
+     * @param jobName 作业标识，例如 'sms-gmail-r2'
+     * @param channel 数据通道，例如 'EMAIL_IMAP'
+     * @param target  目标标识，例如 'alice.h.y.he@gmail.com'
+     * @param maxUid  本次成功入库的最大 UID (由 Flink 累加器汇聚得出)
+     */
+    public void commitOffset(String jobName, String channel, String target, long maxUid) {
+        if (maxUid <= 0L) {
+            LOG.info("ℹ️ [Iceberg Sink] No new records processed in this batch. Watermark remains unchanged.");
+            return;
+        }
+
+        try (IcebergOffsetRepository repo = IcebergOffsetRepository.fromConfig()) {
+            SyncOffset offset = new SyncOffset(
+                    jobName,
+                    channel,
+                    target,
+                    maxUid,
+                    java.time.Instant.now(),
+                    java.time.Instant.now()
+            );
+            repo.saveOffset(offset);
+            LOG.info("🌊 [Iceberg Sink] Successfully advanced lakehouse watermark to UID: {}", maxUid);
+        } catch (Exception e) {
+            LOG.error("❌ [Iceberg Sink] Failed to advance watermark to {}: {}", maxUid, e.getMessage(), e);
+            throw new RuntimeException("Failed to commit offset to Iceberg lakehouse", e);
+        }
     }
 }
 ```
@@ -303,19 +333,73 @@ public class IcebergR2Sink implements Serializable {
 * **设计定位**：纯粹的有向无环图编排。支持通过构造函数或方法注入 `IcebergR2Sink` 实例：
 
 ```java
-public DataStreamSink<RowData> assembleAndAttachSink(StreamExecutionEnvironment env, IcebergR2Sink sink) {
+public DataStreamSink<?> assembleAndAttachSink(StreamExecutionEnvironment env, IcebergR2Sink sink) {
     // 1. 构建抽取与规整流 (并发度 = 2)
     DataStream<SmsRecord> smsStream = buildStream(env);
 
-    // 2. 转换为列式 RowData
+    // 2. 转换为列式 RowData 并挂载写端 (返回 DataStreamSink 算子节点)
     DataStream<RowData> rowStream = smsStream
             .map(new SmsRecordToRowDataMapper())
             .name("SmsRecord-To-RowData-Mapper");
 
-    // 3. 挂载写端并返回 DataStreamSink 实例
     return sink.append(rowStream);
 }
 ```
+
+---
+
+### 4.4 分布式最大 UID 感知：Flink 累加器与两阶段后置安全提交
+
+在有界批处理（Mode B）中，如何安全、精准地知道整批数据中最大的 UID 是多少，并以此推进水位？
+
+#### ① 为什么严禁在流图内部用双 Sink 直接写水位？
+- **缺乏跨表 2PC 事务保障**：`raw_sms_records` 和 `etl_sync_offsets` 是两张独立的物理 Iceberg 表。若在 DAG 内部双写，一旦水位表先提交成功，而数据表写入时网络抖动崩溃，将导致**“数据丢失、但水位已推进”的毁灭性灾难**；
+- **时序倒错**：单条数据流式流动时，算子在收到 `END_OF_INPUT` 前无法知晓全局最大 UID。
+
+#### ② 正解：Flink 分布式最大值累加器 (`LongMaximum`)
+
+```
+                              [ Gmail 邮件流 ]
+                                     │
+                 ┌───────────────────┴───────────────────┐
+                 │                                       │
+           Worker Slot 0                           Worker Slot 1
+       (处理 UID 239 ~ 332)                    (处理 UID 333 ~ 438)
+                 │                                       │
+                 ▼                                       ▼
+    【DemoEmailSubjectParser】              【DemoEmailSubjectParser】
+   ┌───────────────────────────┐           ┌───────────────────────────┐
+   │ 业务数据: 吐出 SmsRecord   │           │ 业务数据: 吐出 SmsRecord   │
+   │ 监控通道: maxUid.add(id)  │           │ 监控通道: maxUid.add(id)  │
+   └─────────────┬─────────────┘           └─────────────┬─────────────┘
+                 │ (写业务数据)                           │ (写业务数据)
+                 ▼                                       ▼
+     [ IcebergWriter: 写 Parquet ]           [ IcebergWriter: 写 Parquet ]
+                 │                                       │
+                 └───────────────────┬───────────────────┘
+                                     │
+                       (批处理结束: 算子退出)
+                                     │
+                                     ▼
+        ┌────────────────────────────────────────────────────────┐
+        │        Flink 引擎内部自动汇聚 (Merge-Max)               │
+        │      maxUid = Math.max(332, 438) = 438                 │
+        └────────────────────────────┬───────────────────────────┘
+                                     │
+                                     ▼ 返回给 Job 主线程！
+     JobExecutionResult result = env.execute(...);
+     Long finalMaxUid = result.getAccumulatorResult("max-processed-uid"); // 🎯 拿到了 438！
+                                     │
+                                     ▼ 传给 Sink 执行步骤 2！
+     sink.commitOffset("sms-gmail-r2", "EMAIL_IMAP", user, finalMaxUid);
+```
+
+1. **Parser 端注册与递增**：
+   `DemoEmailSubjectParser` 继承 `RichFlatMapFunction`，在 `open()` 中向运行时注册 `getRuntimeContext().addAccumulator("max-processed-uid", maxUidTracker)`。每有一条记录经过，顺手调用 `maxUidTracker.add(record.getId())`，0 额外 I/O 成本；
+2. **引擎自动汇聚**：
+   批处理结束时，Flink JobManager 自动将所有 Worker 的局部最大值归约合并（`Math.max`）；
+3. **主作业安全卡口提交**：
+   只有当 `env.execute()` 100% 成功返回后，主线程从 `JobExecutionResult` 提取最终的全局 `maxUid`，最后调用 `sink.commitOffset(...)` 推进水位。**天然保障 At-Least-Once，失败绝不推水位！**
 
 ---
 

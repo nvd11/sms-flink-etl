@@ -90,6 +90,17 @@
   * **消除小文件合并运维负担**：彻底根除 Small File Problem，无需额外调度 `RewriteDataFiles` 维护任务；
   * **兼顾极致吞吐与湖仓健康**：前面并发放水极速抽信，后方单一管口稳健注水。
 
+### ADR-009: 水位推进采用 Flink 累加器与作业后置双阶段闭环 (Accumulator-Driven Post-Execution Watermark Commit)
+* **背景评估**：
+  * 若在 Flink 流图内部同时挂载两个 Sink（一个写业务表，一个写水位表），由于两张独立的 Iceberg 表缺乏跨表 2PC 分布式事务，一旦水位表先提交成功而数据表写入崩溃，将引发“水位超前推进、真实短信永久漏拉”的致命金融级缺陷；
+  * 同时，数据流式流动时，算子在未接收到 `END_OF_INPUT` 前无法知晓全局最大 UID。
+* **决策**：
+  1. **算子层轻量感知**：`DemoEmailSubjectParser` 继承 `RichFlatMapFunction`，挂载 Flink 官方分布式累加器 `LongMaximum("max-processed-uid")`，多 Worker 并发比对本批次最大 UID，0 额外 I/O；
+  2. **作业后置严格卡口**：只有当 `env.execute()` 100% 成功返回后，主线程才从 `JobExecutionResult` 提取最终的全局 `maxUid`，最后调用 `sink.commitOffset(...)` 推进水位。
+* **架构收益**：
+  * **金融级 At-Least-Once 保障**：数据没落稳，水位绝对不推进；任何网络或节点崩溃触发重跑时天然幂等重拉；
+  * **消除空跑与脏数据**：批次无新数据时累加器为 0，自动跳过水位提交，杜绝无意义版本膨胀。
+
 ---
 
 ## 3. Flink 处理流水线与数仓分层设计
