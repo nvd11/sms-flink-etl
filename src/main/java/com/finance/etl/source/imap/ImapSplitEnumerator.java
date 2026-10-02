@@ -29,6 +29,7 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     private final String proxyHost;
     private final int proxyPort;
     private final int maxBatchSize;
+    private final ImapSyncMode syncMode;
 
     // 💡【核心架构注解：为什么必须是 Map<subtaskId, Queue> 专属邮箱制 (Fair Dispatching) 而不是全局共享 Queue？】
     // 1. 先到先得的竞态饥渴 (Race-Condition Starvation)：
@@ -64,6 +65,13 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
     public ImapSplitEnumerator(SplitEnumeratorContext<ImapSplit> context,
                                 String host, int port, String user, String password,
                                 String proxyHost, int proxyPort, int maxBatchSize) {
+        this(context, host, port, user, password, proxyHost, proxyPort, maxBatchSize, ImapSyncMode.EARLIEST_FIRST);
+    }
+
+    public ImapSplitEnumerator(SplitEnumeratorContext<ImapSplit> context,
+                                String host, int port, String user, String password,
+                                String proxyHost, int proxyPort, int maxBatchSize,
+                                ImapSyncMode syncMode) {
         this.context = Objects.requireNonNull(context, "SplitEnumeratorContext must not be null");
         this.host = host;
         this.port = port;
@@ -72,6 +80,7 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
         this.proxyHost = proxyHost;
         this.proxyPort = proxyPort;
         this.maxBatchSize = maxBatchSize;
+        this.syncMode = syncMode != null ? syncMode : ImapSyncMode.EARLIEST_FIRST;
     }
 
     @Override
@@ -246,19 +255,25 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
 
                 // 🎯 核心架构判定：根据水位状态选择检索策略
                 if (lastSyncedUid > 0) {
-                    // 🌟 模式 A：严密增量模式 (Watermark-Driven · EARLIEST_FIRST 顺推)
+                    // 🌟 模式 A：严密增量模式 (Watermark-Driven · 可配置 EARLIEST_FIRST 顺推 或 LATEST_FIRST 优先)
                     // 只要 UID > 上次同步水位，无论用户是否在手机上误点为“已读”，通通精准捕获，绝不漏单！
-                    // 单批次按时间正序截取最多 maxBatchSize 封，保证平稳追赶，杜绝超大批次 OOM。
-                    LOG.info("🌊 [JobManager Master] Using Incremental Watermark Mode. Fetching messages with UID > {} (batch limit: {})...",
-                            lastSyncedUid, maxBatchSize);
+                    LOG.info("🌊 [JobManager Master] Using Incremental Watermark Mode (syncMode: {}). Fetching messages with UID > {} (batch limit: {})...",
+                            syncMode, lastSyncedUid, maxBatchSize);
                     Message[] incrementalMessages = uidFolder.getMessagesByUID(lastSyncedUid + 1, UIDFolder.MAXUID);
 
                     if (incrementalMessages != null && incrementalMessages.length > 0) {
                         int total = incrementalMessages.length;
                         int limit = Math.min(total, maxBatchSize);
-                        // 正向截取：取按时间最早的前 limit 封消息，平稳推进水位
-                        Message[] batchMessages = (total > limit) ?
-                                Arrays.copyOfRange(incrementalMessages, 0, limit) : incrementalMessages;
+                        Message[] batchMessages;
+                        if (syncMode == ImapSyncMode.LATEST_FIRST && total > limit) {
+                            // LATEST_FIRST: 截取最新的 limit 封邮件
+                            batchMessages = Arrays.copyOfRange(incrementalMessages, total - limit, total);
+                        } else if (total > limit) {
+                            // 默认 EARLIEST_FIRST: 截取最早的 limit 封邮件，顺推水位
+                            batchMessages = Arrays.copyOfRange(incrementalMessages, 0, limit);
+                        } else {
+                            batchMessages = incrementalMessages;
+                        }
 
                         FetchProfile fp = new FetchProfile();
                         fp.add(UIDFolder.FetchProfileItem.UID);
@@ -272,22 +287,28 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                         }
                     }
                 } else {
-                    // 🌟 模式 B：首次冷启动模式 (Cold Start / Initial Sync · EARLIEST_FIRST 正向全量补录)
+                    // 🌟 模式 B：首次冷启动模式 (Cold Start / Initial Sync · 可配置 EARLIEST_FIRST 或 LATEST_FIRST)
                     // 湖仓尚无已落盘水位 (lastSyncedUid == 0)。
-                    // 严格坚守 EARLIEST_FIRST 正向补录原则：从收件箱第 1 封历史邮件开始正向抽取，单批上限为 maxBatchSize。
-                    // 配合定时调度，流水线会自动平稳追赶 (1~200 -> 201~400 -> ...)，全量历史短信一封不漏！
                     int totalCount = inbox.getMessageCount();
-                    int end = Math.min(totalCount, maxBatchSize);
-                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0, total inbox messages: {}). Fetching earliest batch from 1 to {} (limit: {})...",
-                            totalCount, end, maxBatchSize);
-                    if (totalCount > 0 && end >= 1) {
-                        Message[] earliestMessages = inbox.getMessages(1, end);
+                    LOG.info("❄️ [JobManager Master] Cold start mode (watermark = 0, total inbox messages: {}, syncMode: {}). Fetching batch (limit: {})...",
+                            totalCount, syncMode, maxBatchSize);
+                    if (totalCount > 0) {
+                        Message[] batchMessages;
+                        if (syncMode == ImapSyncMode.LATEST_FIRST) {
+                            // LATEST_FIRST: 倒序截取最新窗口 (优先保证近端账目)
+                            int start = Math.max(1, totalCount - maxBatchSize + 1);
+                            batchMessages = inbox.getMessages(start, totalCount);
+                        } else {
+                            // 默认 EARLIEST_FIRST: 从第 1 封开始正向全量补录 (一封不漏)
+                            int end = Math.min(totalCount, maxBatchSize);
+                            batchMessages = inbox.getMessages(1, end);
+                        }
 
                         FetchProfile fp = new FetchProfile();
                         fp.add(UIDFolder.FetchProfileItem.UID);
-                        inbox.fetch(earliestMessages, fp);
+                        inbox.fetch(batchMessages, fp);
 
-                        for (Message msg : earliestMessages) {
+                        for (Message msg : batchMessages) {
                             uids.add(uidFolder.getUID(msg));
                         }
                     }

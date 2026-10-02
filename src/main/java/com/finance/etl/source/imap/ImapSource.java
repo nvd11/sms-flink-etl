@@ -40,9 +40,15 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
     private final String proxyHost;
     private final int proxyPort;
     private final int maxBatchSize;
+    private final ImapSyncMode syncMode;
 
     public ImapSource(String host, int port, String user, String password,
                       String proxyHost, int proxyPort, int maxBatchSize) {
+        this(host, port, user, password, proxyHost, proxyPort, maxBatchSize, ImapSyncMode.EARLIEST_FIRST);
+    }
+
+    public ImapSource(String host, int port, String user, String password,
+                      String proxyHost, int proxyPort, int maxBatchSize, ImapSyncMode syncMode) {
         this.host = host;
         this.port = port;
         this.user = user;
@@ -50,6 +56,7 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
         this.proxyHost = proxyHost;
         this.proxyPort = proxyPort;
         this.maxBatchSize = maxBatchSize;
+        this.syncMode = syncMode != null ? syncMode : ImapSyncMode.EARLIEST_FIRST;
     }
 
     public static Builder builder() {
@@ -67,8 +74,10 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
         String proxyHost = ConfigUtils.get("IMAP_PROXY_HOST");
         int proxyPort = ConfigUtils.getInt("IMAP_PROXY_PORT", 7890);
         int maxBatchSize = ConfigUtils.getInt("IMAP_MAX_BATCH_SIZE", 200);
+        String syncModeStr = ConfigUtils.get("IMAP_SYNC_MODE", "EARLIEST_FIRST");
+        ImapSyncMode syncMode = ImapSyncMode.fromString(syncModeStr);
 
-        return new ImapSource(host, port, user, password, proxyHost, proxyPort, maxBatchSize);
+        return new ImapSource(host, port, user, password, proxyHost, proxyPort, maxBatchSize, syncMode);
     }
 
     @Override
@@ -83,7 +92,7 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
 
     @Override
     public SplitEnumerator<ImapSplit, Void> createEnumerator(SplitEnumeratorContext<ImapSplit> enumContext) throws Exception {
-        return new ImapSplitEnumerator(enumContext, host, port, user, password, proxyHost, proxyPort, maxBatchSize);
+        return new ImapSplitEnumerator(enumContext, host, port, user, password, proxyHost, proxyPort, maxBatchSize, syncMode);
     }
 
     @Override
@@ -103,6 +112,10 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
 
     public String getUser() {
         return user;
+    }
+
+    public ImapSyncMode getSyncMode() {
+        return syncMode;
     }
 
     /**
@@ -138,6 +151,7 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
         private String proxyHost;
         private int proxyPort = 7890;
         private int maxBatchSize = 20;
+        private ImapSyncMode syncMode = ImapSyncMode.EARLIEST_FIRST;
 
         public Builder host(String host) { this.host = host; return this; }
         public Builder port(int port) { this.port = port; return this; }
@@ -149,9 +163,10 @@ public class ImapSource implements Source<RawEmail, ImapSplit, Void>, Serializab
             return this;
         }
         public Builder maxBatchSize(int maxBatchSize) { this.maxBatchSize = maxBatchSize; return this; }
+        public Builder syncMode(ImapSyncMode syncMode) { this.syncMode = syncMode; return this; }
 
         public ImapSource build() {
-            return new ImapSource(host, port, user, password, proxyHost, proxyPort, maxBatchSize);
+            return new ImapSource(host, port, user, password, proxyHost, proxyPort, maxBatchSize, syncMode);
         }
     }
 }
