@@ -41,7 +41,7 @@ public class ConfigUtilsTest {
         LOG.info("  ✓ R2_S3_ENDPOINT: {}", r2Endpoint);
 
         assertNotNull(r2Bucket, "R2_BUCKET_NAME 必须从 .env 成功加载");
-        assertEquals("sms-flink-etl", r2Bucket, "R2 存储桶名称必须匹配");
+        assertTrue(r2Bucket.startsWith("sms-flink-etl"), "R2 存储桶名称必须以 sms-flink-etl 开头 (支持 sms-flink-etl 与 sms-flink-etl-dev)");
         assertTrue(r2Endpoint.contains("r2.cloudflarestorage.com"), "R2 Endpoint 域名必须匹配");
 
         // 默认保底值测试
