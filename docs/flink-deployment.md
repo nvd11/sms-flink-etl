@@ -31,10 +31,10 @@
 |  [ K3s CronJob/Job: flink-sms-batch-etl ] (Namespace: default)              |
 |  - 基础镜像: eclipse-temurin:21-jre-jammy (JDK 21 运行时)                    |
 |  - 算力限制: Requests 500m/1Gi · Limits 2000m/2Gi (JVM 堆 -Xmx1536m)        |
-|  - 算子流水:                                                                |
-|    1. EmailImapBatchSource: 增量抓取未读动账邮件                             |
-|    2. RawRecordFormatter: 物理元数据规整与时间时区映射                      |
-|    3. IcebergBatchSink: 基于 S3A 写入 Parquet 并提交 Snapshot               |
+|  - 算子流水 (漏斗形并发拓扑):                                                |
+|    1. ImapSource: FLIP-27 标准连接器 (P=2 并发拉取邮件)                       |
+|    2. DemoEmailSubjectParser: 管道化纯函数清洗 & SHA-256 指纹提取 (P=2)         |
+|    3. IcebergBatchSink: writeParallelism=1 单写收敛 (消灭小文件碎片)           |
 |  - 执行形态: 耗时 10~20 秒，处理完成正常退出并回收所有内存资源               |
 +─────────────────────────────────────────┬───────────────────────────────────+
                                           │ S3A over TLS (零出网流量费)
@@ -89,7 +89,7 @@ fs.s3a.secret.key=${R2_S3_SECRET_ACCESS_KEY}
 # Iceberg Catalog 配置 (与 Trino 共享 CockroachDB 元数据)
 iceberg.catalog.name=finance
 iceberg.catalog.type=jdbc
-iceberg.catalog.uri=jdbc:postgresql://brief-titan-32937.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/finance-db?sslmode=require
+iceberg.catalog.uri=jdbc:postgresql://brief-titan-32937.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/iceberg-catalog?sslmode=require
 iceberg.catalog.warehouse=s3a://sms-flink-etl/iceberg/warehouse
 ```
 

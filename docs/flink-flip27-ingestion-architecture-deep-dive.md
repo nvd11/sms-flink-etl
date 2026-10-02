@@ -395,10 +395,49 @@ flowchart TB
 
 ---
 
-## 7. 结语：工业级摄取架构的收益
+## 7. 全链路并发拓扑：漏斗形并发设计 (前宽后窄)
 
-通过将数据摄取体系解构为 `Source`、`ImapSplit`、`ImapSplitEnumerator` 与 `ImapSourceReader` 四大正统实体：
+在工业级批处理湖仓架构中，数据摄取链路各阶段对算力与并发的需求并非一刀切。本流水线采用了**“前宽后窄”的漏斗形黄金并发拓扑**：
+
+```mermaid
+flowchart TB
+    subgraph SourceStage["1. 数据源与清洗阶段 (Parallelism = 2)"]
+        S0["Worker Slot 0:<br/>ImapSourceReader (100 UIDs)"]
+        S1["Worker Slot 1:<br/>ImapSourceReader (100 UIDs)"]
+        P0["DemoEmailSubjectParser (Slot 0)"]
+        P1["DemoEmailSubjectParser (Slot 1)"]
+        S0 --> P0
+        S1 --> P1
+    end
+
+    subgraph SinkStage["2. 湖仓落盘与元数据提交阶段 (Parallelism = 1)"]
+        Writer["IcebergSink Writer<br/>(writeParallelism = 1 · 消除小文件碎片)"]
+        Committer["IcebergFilesCommitter<br/>(强制单并发 = 1 · CAS 原子更新 Snapshot)"]
+        Writer --> Committer
+    end
+
+    P0 -->|本地内存汇聚| Writer
+    P1 -->|本地内存汇聚| Writer
+    Committer --> R2[("Cloudflare R2<br/>(单包 Parquet 落地)")]
+```
+
+### 7.1 为什么写端必须收敛为单并发 (`writeParallelism = 1`)？
+1. **消灭小文件灾难 (Small File Problem)**：
+   增量批处理每批仅有几十至两百条短信（约 20~40KB）。若沿用双并发写入，单批次将分裂出多个 10~20KB 的微型 Parquet 文件。按定时调度长期累积，R2 存储桶中将堆积数以千计的碎片小文件，下游 Trino 交互分析时需发起大量小 I/O 请求，严重拖垮全表检索性能；
+2. **Cloudflare R2 调用成本优化**：
+   R2 虽免除出网流量费，但对 Class A 操作（PUT 写入）计费。单文件写入生成最少量的 PUT 请求与 Manifest 元数据文件，实现最高经济性；
+3. **本地计算开销极小**：
+   200 条记录在本地转为 Parquet 列存并上传 R2 仅需不到 50 毫秒，单线程算力绰绰有余，无需牺牲文件整洁度换取无意义的写端并发；
+4. **Committer 线性一致性**：
+   底层的 `IcebergFilesCommitter` 在批处理终态触发一次 CAS 原子提交至 CockroachDB Catalog，强制单并发（P=1）保证元数据快照的绝对线性一致性。
+
+---
+
+## 8. 结语：工业级摄取架构的收益
+
+通过将数据摄取体系解构为 `Source`、`ImapSplit`、`ImapSplitEnumerator` 与 `ImapSourceReader` 四大正统实体，并配合写端的漏斗形单并发收敛：
 
 1. **内存确定性**：Master 仅感知轻量级工单，彻底根绝元数据膨胀诱发 Master 节点 OOM 的可能。
 2. **作业弹性与容错**：分片支持双向退单（`addSplitsBack`），下游 Worker 遭遇物理抖动或抢占时，未竟分片可被其他 Worker 丝滑继承。
-3. **架构内聚与可维护性**：外部协议层细节（如连接池、SSL/TLS 参数构造）可收拢于专属工具类（如 `ImapUtils`），上层逻辑面向纯粹的 Flink 运行时契约编程，保证核心拓扑历经版本迭代仍具备极高的稳定性与演进能力。
+3. **湖仓物理体质致密健康**：前宽后窄架构兼顾了公网抓取的大吞吐与湖仓存储的高聚合，从根源消灭小文件碎片。
+4. **架构内聚与可维护性**：外部协议层细节收拢于专属工具类（如 `ImapUtils`），上层逻辑面向纯粹的 Flink 运行时契约编程，保证核心拓扑历经版本迭代仍具备极高的稳定性与演进能力。

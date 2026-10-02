@@ -78,6 +78,18 @@
   * `R2_S3_ENDPOINT`、`R2_S3_ACCESS_KEY_ID`、`R2_S3_SECRET_ACCESS_KEY`、`R2_BUCKET_NAME`（Cloudflare R2 S3 凭据）
   统一由 K8s Secret 注入 Pod 内存，内网配置全量收敛于私有资产真理源 `cloud_accounts_and_spaces.md`。
 
+### ADR-008: 湖仓入库写端收敛为单并发 (writeParallelism = 1 漏斗形拓扑)
+* **背景评估**：
+  * 读端（IMAP）与清洗端（Parser）面对的是公网延迟与多核哈希计算，需要充分利用双核 TaskSlot 榨干吞吐；
+  * 但写端（Iceberg Parquet）处理的是每批仅几十至数百行的轻量增量数据，单线程在本地压缩并上传至 R2 仅需不到 50 毫秒；
+  * 若写端沿用全局并发度（P=2），每次批处理必定割裂产出多个 10~20KB 的超微小文件，引发湖仓元数据膨胀并严重损害下游 Trino 分析性能；
+  * 此外，Cloudflare R2 按 Class A 操作（PUT 写入请求数）计费，文件碎片翻倍直接导致存储账单翻倍。
+* **决策**：流水线采用**“前宽后窄”的漏斗形并发拓扑**——读端与清洗端并发设为 2（`FLINK_PARALLELISM=2`），写端通过 `FlinkSink.forRowData(...).writeParallelism(1)` 强制收敛为单一 Writer 线程，底座 Committer 保持 Flink/Iceberg 强制的单并发（P=1）原子提交。
+* **架构收益**：
+  * **物理文件整洁致密**：每次批处理产出且仅产出 1 个紧凑的高压缩比 Parquet 数据文件；
+  * **消除小文件合并运维负担**：彻底根除 Small File Problem，无需额外调度 `RewriteDataFiles` 维护任务；
+  * **兼顾极致吞吐与湖仓健康**：前面并发放水极速抽信，后方单一管口稳健注水。
+
 ---
 
 ## 3. Flink 处理流水线与数仓分层设计
@@ -89,15 +101,18 @@
 ```text
 [ 采集端 (SmsForwarder ➔ Gmail) ]
               │
-              ▼
-[ EmailImapBatchSource ] (短连接拉取原始邮件 DTO)
+              ▼  (FLIP-27 并发拉取 · Parallelism = 2)
+[ ImapSource (Worker Slot 0 / 1) ] (批量整包预取 · 双工位并发拉取邮件)
               │
-              ▼
-[ RawRecordFormatter ] (物理元数据规整与类型映射)
+              ▼  (并发清洗与指纹提取 · Parallelism = 2)
+[ DemoEmailSubjectParser ] (管道化纯函数清洗 · SHA-256 业务唯一指纹)
               │
-              ▼
-[ Flink IcebergBatchSink ] (S3A 直连 Cloudflare R2 写入 Iceberg 表)
-              │  (Append-Only Parquet + Metadata Snapshot 提交)
+              ▼  (本地内存轻量汇聚 Forward)
+[ IcebergBatchSink (Writer) ] ── (writeParallelism = 1 · 消除小文件碎片，单包 Parquet)
+              │  (Append-Only Parquet 文件刷写)
+              ▼  
+[ IcebergFilesCommitter ] ────── (强制单并发 = 1 · CAS 原子更新 Snapshot & Catalog)
+              │
               ▼
 ============================ ODS 数据湖仓底座已落稳 ============================
               │
@@ -108,17 +123,21 @@
 (下游 DWD 任务消费 / 正则解析) ➔ 消费明细事实表 (fct_transactions)
 ```
 
-### 3.1 ODS Source 算子 (`EmailImapBatchSource`)
+### 3.1 ODS Source 算子 (`ImapSource` · FLIP-27 规范)
 * 协议：Jakarta Mail / IMAP over SSL (Port 993)；
 * 认证：应用专用密码授权 (`alice.h.y.he@gmail.com`)；
-* 检索策略：
-  1. 获取当前未读或增量邮件；
-  2. 批量拉取发件人、收件号码、正文全文与时间戳后即刻关闭连接。
+* 检索策略：基于湖仓 Offset 水位直扫（Watermark-Driven）或物理序号最新窗口倒序截取，彻底无视已读/未读状态；
+* 并发控制：Master 调度器通过专属邮箱制（`splitsBySubtask`）将工单按 `splitIndex % parallelism` 公平派发给各个 Worker TaskSlot。
 
-### 3.2 ODS Sink 算子 (`Flink IcebergBatchSink`)
+### 3.2 ODS Sink 算子 (`Flink IcebergBatchSink` · 漏斗形单写控制)
 * 格式：Apache Iceberg (Parquet 列式编码 + Snappy 压缩)；
-* 存储底座：Cloudflare R2（S3 兼容协议）；
-* 写入语义：**Batch Append-Only 事务性提交**。原子更新 Snapshot，天然保证数据真实保真且具备快照隔离能力。
+* 存储底座：Cloudflare R2（S3 兼容协议，零出口流量费）；
+* 写入语义：**Batch Append-Only 事务性提交**。原子更新 Snapshot，天然保证数据真实保真且具备快照隔离能力；
+* **写端单并发收敛策略 (`writeParallelism = 1`)**：
+  * **设计初衷**：与 Source/Transform 的双并发（P=2）不同，Iceberg Sink 显式锁定为单 Worker 写入；
+  * **杜绝小文件灾难 (Small File Problem)**：每批次动账短信仅几十至两百条（约 20~40KB），多 Writer 会分散产出微型 Parquet 文件，按天累积导致 R2 小文件爆炸与 Trino 扫表严重降速；
+  * **R2 成本优化**：单文件写入生成最少量的 Class A PUT 请求，大幅降低对象存储写调用成本；
+  * **Committer 线性一致性**：底层的 `IcebergFilesCommitter` 在批处理终态触发一次 CAS 原子提交至 CockroachDB Catalog，强制单并发保证绝对线性一致性。
 
 ---
 
