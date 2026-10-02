@@ -42,6 +42,10 @@ public final class IcebergCatalogFactory {
         hadoopConf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
         hadoopConf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"); // 🎯 核心兼任：支持 s3:// 协议前缀
         hadoopConf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        hadoopConf.set("hadoop.security.authentication", "simple");
+        if (System.getProperty("user.name") == null || System.getProperty("user.name").trim().isEmpty()) {
+            System.setProperty("user.name", "flink");
+        }
         return hadoopConf;
     }
 
