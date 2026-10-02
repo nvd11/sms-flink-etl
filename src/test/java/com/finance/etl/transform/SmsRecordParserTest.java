@@ -32,7 +32,7 @@ public class SmsRecordParserTest {
         assertEquals(1, records.size());
 
         SmsRecord r = records.get(0);
-        assertEquals("95508", r.getSender());
+        assertEquals("CGB", r.getSender());
         assertEquals("EMAIL_IMAP", r.getChannel());
         assertEquals("SIM_SLOT_1", r.getReceiverPhone());
         assertNotNull(r.getMsgUid());

@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS iceberg.finance.raw_sms_records (
     id              BIGINT,                              -- 全局递增序列 ID
     msg_uid         VARCHAR,                             -- RFC 2822 Message-ID 或全局唯一消息指纹 (防重业务唯一键)
     channel         VARCHAR,                             -- 采集通道: 'EMAIL_IMAP', 'SMS_DIRECT', 'WEBHOOK'
-    sender          VARCHAR,                             -- 发送方原始号码: 95508, WECHAT_PAY, ALIPAY 等
+    sender          VARCHAR,                             -- 机构/渠道大写代号: CGB, CMB, BOC, HSBC, WECHAT_PAY, ALIPAY, OTHER
     receiver_phone  VARCHAR,                             -- 接收短信的本机手机号码 / 卡槽标识 (SIM_SLOT_1, SIM_SLOT_2)
     received_at     TIMESTAMP(6) WITH TIME ZONE,         -- 原始短信到达物理时间 (带时区微秒戳)
     raw_body        VARCHAR,                             -- 原始短信全文报文 (100% 原始保真)

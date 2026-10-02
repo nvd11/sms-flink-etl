@@ -44,7 +44,7 @@ class DemoEmailSubjectParserTest {
         SmsRecord emitted = collected.get(0);
         assertEquals(999L, emitted.getId());
         assertEquals("EMAIL_IMAP", emitted.getChannel());
-        assertEquals("95508", emitted.getSender());
+        assertEquals("CGB", emitted.getSender());
         assertEquals("SIM_SLOT_2", emitted.getReceiverPhone());
         assertEquals("106980095508【广发银行】您尾号3342信用卡消费21.24元。SubId：22026-09-27 18:54:07", emitted.getRawBody());
         assertNotNull(emitted.getMsgUid());

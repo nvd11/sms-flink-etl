@@ -30,14 +30,14 @@ class SmsFieldExtractorTest {
     }
 
     @Test
-    @DisplayName("测试 SenderExtractor: 精准识别广发、微信支付、支付宝与兜底")
+    @DisplayName("测试 SenderExtractor: 精准识别各金融机构与渠道代码 (CGB, CMB, BOC, HSBC, WECHAT_PAY, ALIPAY, OTHER)")
     void testSenderExtractor() {
         SenderExtractor extractor = new SenderExtractor();
 
         RawEmail cgbEmail = new RawEmail();
         cgbEmail.setSubject("106980095508");
         cgbEmail.setBody("【广发银行】您尾号3342信用卡消费21.24元");
-        assertEquals("95508", extractor.extract(cgbEmail).get("sender"));
+        assertEquals("CGB", extractor.extract(cgbEmail).get("sender"));
 
         RawEmail wxEmail = new RawEmail();
         wxEmail.setSubject("com.tencent.mm");
@@ -53,6 +53,16 @@ class SmsFieldExtractorTest {
         hsbcEmail.setSubject("106910095366");
         hsbcEmail.setBody("【汇丰银行中国】温馨提示：您尾号0025的美元信用卡当月账单为5.99元");
         assertEquals("HSBC", extractor.extract(hsbcEmail).get("sender"));
+
+        RawEmail bocEmail = new RawEmail();
+        bocEmail.setSubject("95566");
+        bocEmail.setBody("【中国银行】您尾号1234消费100元");
+        assertEquals("BOC", extractor.extract(bocEmail).get("sender"));
+
+        RawEmail cmbEmail = new RawEmail();
+        cmbEmail.setSubject("95555");
+        cmbEmail.setBody("【招商银行】您尾号5678消费200元");
+        assertEquals("CMB", extractor.extract(cmbEmail).get("sender"));
 
         RawEmail otherEmail = new RawEmail();
         otherEmail.setSubject("10010");

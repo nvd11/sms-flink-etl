@@ -44,16 +44,16 @@ public class SmsRecordParser implements FlatMapFunction<RawEmail, SmsRecord>, Se
         String body = email.getBody() != null ? email.getBody() : "";
         String fullContent = subject + " " + body;
 
-        // 识别业务发送方 (广发 95508, 微信支付, 支付宝, 招行等)
+        // 识别业务发送方 (广发 CGB, 微信支付, 支付宝, 招行 CMB 等)
         String sender = "OTHER";
         if (fullContent.contains("95508") || fullContent.contains("广发银行")) {
-            sender = "95508";
+            sender = "CGB";
         } else if (fullContent.contains("微信支付") || fullContent.contains("财付通")) {
             sender = "WECHAT_PAY";
         } else if (fullContent.contains("支付宝") || fullContent.contains("蚂蚁金服")) {
             sender = "ALIPAY";
         } else if (fullContent.contains("95555") || fullContent.contains("招商银行")) {
-            sender = "95555";
+            sender = "CMB";
         }
 
         // 识别接收手机号 / 卡槽标识 (从 SmsForwarder 默认主题提取，例如: [SIM1] 或手机号)

@@ -29,7 +29,7 @@ public class SmsPipelineTest {
         SmsRecord cgbRecord = formatter.map(cgbSms);
 
         assertNotNull(cgbRecord, "规整后的实体不应为空");
-        assertEquals("95508", cgbRecord.getSender(), "发送方应识别为广发 95508");
+        assertEquals("CGB", cgbRecord.getSender(), "发送方应识别为广发 CGB");
         assertEquals("EMAIL_IMAP", cgbRecord.getChannel(), "采集通道应为 EMAIL_IMAP");
         assertNotNull(cgbRecord.getMsgUid(), "必须生成 SHA-256 唯一指纹键");
         assertEquals(64, cgbRecord.getMsgUid().length(), "SHA-256 16进制摘要长度应为 64");

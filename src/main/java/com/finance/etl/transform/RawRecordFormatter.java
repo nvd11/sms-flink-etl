@@ -25,9 +25,9 @@ public class RawRecordFormatter implements MapFunction<String, SmsRecord> {
         String msgUid = generateMessageFingerprint(rawMessage);
         
         // 简单启发式提取发送方 (针对常见银行与服务号如 95508, 微信支付, 支付宝)
-        String sender = "UNKNOWN";
+        String sender = "OTHER";
         if (rawMessage.contains("95508") || rawMessage.contains("广发银行")) {
-            sender = "95508";
+            sender = "CGB";
         } else if (rawMessage.contains("微信支付") || rawMessage.contains("财付通")) {
             sender = "WECHAT_PAY";
         } else if (rawMessage.contains("支付宝") || rawMessage.contains("蚂蚁金服")) {

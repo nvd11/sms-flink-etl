@@ -24,7 +24,7 @@ class SmsRecordToRowDataMapperTest {
         record.setId(408L);
         record.setMsgUid("3c02cd1ff392d99e00f0ee4bbdfa3a4930597f186753de3c18123e7846da61a9");
         record.setChannel("EMAIL_IMAP");
-        record.setSender("95508");
+        record.setSender("CGB");
         record.setReceiverPhone("SIM_SLOT_1");
         record.setReceivedAt(receivedAt);
         record.setRawBody("【广发银行】您尾号3342信用卡29日21:44消费6646.00人民币。");
@@ -49,7 +49,7 @@ class SmsRecordToRowDataMapperTest {
 
         // 3: sender (VARCHAR)
         assertFalse(row.isNullAt(3));
-        assertEquals("95508", row.getString(3).toString());
+        assertEquals("CGB", row.getString(3).toString());
 
         // 4: receiver_phone (VARCHAR)
         assertFalse(row.isNullAt(4));

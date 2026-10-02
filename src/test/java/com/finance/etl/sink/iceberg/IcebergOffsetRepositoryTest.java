@@ -34,14 +34,14 @@ class IcebergOffsetRepositoryTest {
         }
 
         try (IcebergOffsetRepository repo = IcebergOffsetRepository.fromConfig()) {
-            long latestOffset = repo.getLatestOffset("sms-gmail-r2", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
+            long latestOffset = repo.getLatestOffset("test-offset-job", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
             LOG.info("🧪 [Test] Discovered latest offset: {}", latestOffset);
             assertTrue(latestOffset >= 0L, "读取到的水位应当大于等于 0");
         }
     }
 
     @Test
-    @DisplayName("测试真实湖仓水位保存与回读闭环验证")
+    @DisplayName("测试真实湖仓水位保存与回读闭环验证 (使用独立测试 job_name，避免污染主作业水位)")
     void testSaveAndReadOffsetRoundtrip() throws Exception {
         String uri = ConfigUtils.get("ICEBERG_CATALOG_URI");
         if (uri == null || uri.trim().isEmpty() || uri.contains("<host>")) {
@@ -50,11 +50,11 @@ class IcebergOffsetRepositoryTest {
         }
 
         try (IcebergOffsetRepository repo = IcebergOffsetRepository.fromConfig()) {
-            long currentOffset = repo.getLatestOffset("sms-gmail-r2", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
+            long currentOffset = repo.getLatestOffset("test-offset-job", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
 
-            long nextOffset = Math.max(currentOffset + 1, 450L);
+            long nextOffset = Math.max(currentOffset + 1, 100L);
             SyncOffset offset = new SyncOffset(
-                    "sms-gmail-r2",
+                    "test-offset-job",
                     "EMAIL_IMAP",
                     "alice.h.y.he@gmail.com",
                     nextOffset,
@@ -64,7 +64,7 @@ class IcebergOffsetRepositoryTest {
 
             repo.saveOffset(offset);
 
-            long updatedOffset = repo.getLatestOffset("sms-gmail-r2", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
+            long updatedOffset = repo.getLatestOffset("test-offset-job", "EMAIL_IMAP", "alice.h.y.he@gmail.com");
             LOG.info("🧪 [Test] Offset after commit: {} (expected >= {})", updatedOffset, nextOffset);
             assertTrue(updatedOffset >= nextOffset, "提交新位点后读取的水位应当成功推进");
         }
