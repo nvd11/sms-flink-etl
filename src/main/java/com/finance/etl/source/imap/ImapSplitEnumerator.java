@@ -182,6 +182,19 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
             } catch (NumberFormatException ignored) {
             }
         }
+
+        // 🎯 核心闭环：通过独立的 IcebergOffsetRepository 毫秒级直读 etl_sync_offsets 湖仓元数据表
+        try (com.finance.etl.sink.iceberg.IcebergOffsetRepository offsetRepo =
+                     com.finance.etl.sink.iceberg.IcebergOffsetRepository.fromConfig()) {
+            long uid = offsetRepo.getLatestOffset("sms-gmail-r2", "EMAIL_IMAP", user);
+            if (uid > 0L) {
+                LOG.info("🌊 [Lakehouse Offset] Discovered latest synced UID from Iceberg table: {}", uid);
+                return uid;
+            }
+        } catch (Exception e) {
+            LOG.warn("⚠️ [Lakehouse Offset] Could not read offset repository: {}. Defaulting to 0L.", e.getMessage());
+        }
+
         LOG.info("ℹ️ [Lakehouse Offset] Defaulting start UID to 0L (Cold start mode).");
         return 0L;
     }

@@ -113,10 +113,11 @@ com.finance.etl
 │
 ├── sink.iceberg                        <-- [湖仓写端专职包]
 │   ├── SmsRecordToRowDataMapper.java   # 【工序①】类型投影：SmsRecord (POJO) -> RowData
-│   └── IcebergR2SinkFactory.java       # 【工序②】存储工厂：组装 S3A、Catalog 并挂载 FlinkSink
+│   ├── IcebergOffsetRepository.java   # 【工序②】湖仓元数据仓储：etl_sync_offsets 增量水位读写闭环
+│   └── IcebergR2Sink.java              # 【工序③】写端门面实体：组装 S3A、Catalog 并返回 DataStreamSink
 │
 ├── pipeline
-│   └── SmsGmailR2Pipeline.java         # 【工序③】总图编排：将 Source -> Parser -> Sink 装配成完整 DAG
+│   └── SmsGmailR2Pipeline.java         # 【工序④】总图编排：将 Source -> Parser -> Sink 装配成完整 DAG
 │
 └── jobs
     └── SmsGmailR2Job.java              # 执行入口：纯参数驱动，启动 Flink 运行环境
@@ -166,15 +167,19 @@ public class SmsRecordToRowDataMapper implements MapFunction<SmsRecord, RowData>
 
 ---
 
-### 4.2 工序 ②：湖仓连接器工厂 (`IcebergR2SinkFactory`)
+### 4.2 工序 ②：湖仓写端连接器实体门面 (`IcebergR2Sink`)
 * **包路径**：`com.finance.etl.sink.iceberg`
-* **设计定位**：基础设施适配器（Adapter）。负责从环境变量读取 Cloudflare R2 S3A 凭据与 CockroachDB JDBC 连接信息，装配出完整的 `FlinkSink` 并挂载至数据流。
+* **设计定位**：正统面向对象实体门面（Facade）。与读端的 `ImapSource` 形成绝对的**镜像对称**：
+  - `ImapSource.fromConfig()` 返回持有连接配置的读端实体；
+  - `IcebergR2Sink.fromConfig()` 返回持有 R2 与 Catalog 连接配置的写端实体；
+  - 提供 `public DataStreamSink<RowData> append(DataStream<RowData> rowStream)` 行为方法，挂载底层两阶段提交算子链并返回标准的 Flink `DataStreamSink`。
 
 ```java
 package com.finance.etl.sink.iceberg;
 
 import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.table.data.RowData;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -184,34 +189,89 @@ import org.apache.iceberg.flink.sink.FlinkSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
-public class IcebergR2SinkFactory {
-    private static final Logger LOG = LoggerFactory.getLogger(IcebergR2SinkFactory.class);
+public class IcebergR2Sink implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private static final Logger LOG = LoggerFactory.getLogger(IcebergR2Sink.class);
 
-    public static void attach(DataStream<RowData> rowStream) {
-        LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink with writeParallelism=1...");
+    private final String endpoint;
+    private final String accessKey;
+    private final String secretKey;
+    private final String catalogUri;
+    private final String catalogUser;
+    private final String catalogPassword;
+    private final String warehouseDir;
+    private final String catalogName;
+    private final String schemaName;
+    private final String tableName;
+    private final int writeParallelism;
+
+    public IcebergR2Sink(String endpoint, String accessKey, String secretKey,
+                          String catalogUri, String catalogUser, String catalogPassword,
+                          String warehouseDir, String catalogName,
+                          String schemaName, String tableName, int writeParallelism) {
+        this.endpoint = Objects.requireNonNull(endpoint, "R2 endpoint must not be null");
+        this.accessKey = Objects.requireNonNull(accessKey, "R2 access key must not be null");
+        this.secretKey = Objects.requireNonNull(secretKey, "R2 secret key must not be null");
+        this.catalogUri = Objects.requireNonNull(catalogUri, "Catalog URI must not be null");
+        this.catalogUser = Objects.requireNonNull(catalogUser, "Catalog user must not be null");
+        this.catalogPassword = Objects.requireNonNull(catalogPassword, "Catalog password must not be null");
+        this.warehouseDir = warehouseDir;
+        this.catalogName = catalogName;
+        this.schemaName = schemaName;
+        this.tableName = tableName;
+        this.writeParallelism = writeParallelism;
+    }
+
+    /**
+     * 工厂方法：从环境变量 / .env 中装配并返回一个配置完备的 IcebergR2Sink 实体实例
+     */
+    public static IcebergR2Sink fromConfig() {
+        return new IcebergR2Sink(
+                ConfigUtils.get("R2_S3_ENDPOINT", ""),
+                ConfigUtils.get("R2_S3_ACCESS_KEY_ID", ""),
+                ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_URI", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_USER", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", ""),
+                ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"),
+                ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance"),
+                ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev"),
+                "raw_sms_records",
+                1 // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
+        );
+    }
+
+    /**
+     * 行为方法：将上游 RowData 流挂载到 Iceberg 表，返回 Flink 官方 DataStreamSink 算子节点
+     */
+    public DataStreamSink<RowData> append(DataStream<RowData> rowStream) {
+        LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={})...",
+                schemaName, tableName, writeParallelism);
 
         // 1. 组装 Hadoop S3A 文件系统配置 (直连 Cloudflare R2)
         Configuration hadoopConf = new Configuration();
-        hadoopConf.set("fs.s3a.endpoint", ConfigUtils.get("R2_S3_ENDPOINT"));
-        hadoopConf.set("fs.s3a.access.key", ConfigUtils.get("R2_S3_ACCESS_KEY_ID"));
-        hadoopConf.set("fs.s3a.secret.key", ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY"));
+        hadoopConf.set("fs.s3a.endpoint", endpoint);
+        hadoopConf.set("fs.s3a.access.key", accessKey);
+        hadoopConf.set("fs.s3a.secret.key", secretKey);
         hadoopConf.set("fs.s3a.path.style.access", "true");
         hadoopConf.set("fs.s3a.connection.ssl.enabled", "true");
         hadoopConf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+        hadoopConf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"); // 兼容 s3:// 协议前缀
         hadoopConf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
 
         // 2. 组装 JDBC CatalogLoader (CockroachDB 元数据中心)
         Map<String, String> catalogProperties = new HashMap<>();
         catalogProperties.put("type", "jdbc");
-        catalogProperties.put("uri", ConfigUtils.get("ICEBERG_CATALOG_URI"));
-        catalogProperties.put("jdbc.user", ConfigUtils.get("ICEBERG_CATALOG_USER"));
-        catalogProperties.put("jdbc.password", ConfigUtils.get("ICEBERG_CATALOG_PASSWORD"));
-        catalogProperties.put("warehouse", ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"));
+        catalogProperties.put("uri", catalogUri);
+        catalogProperties.put("jdbc.user", catalogUser);
+        catalogProperties.put("jdbc.password", catalogPassword);
+        catalogProperties.put("warehouse", warehouseDir);
 
-        String catalogName = ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance");
         CatalogLoader catalogLoader = CatalogLoader.custom(
                 catalogName,
                 catalogProperties,
@@ -219,19 +279,19 @@ public class IcebergR2SinkFactory {
                 "org.apache.iceberg.jdbc.JdbcCatalog"
         );
 
-        // 3. 动态解析 Schema (支持 dev 与 prod 环境物理隔离)
-        String schemaName = ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev");
-        TableIdentifier tableId = TableIdentifier.of(schemaName, "raw_sms_records");
+        // 3. 动态载入目标表元数据
+        TableIdentifier tableId = TableIdentifier.of(schemaName, tableName);
         TableLoader tableLoader = TableLoader.fromCatalog(catalogLoader, tableId);
 
-        // 4. 调用官方 FlinkSink，并锁定 writeParallelism(1)！
-        FlinkSink.forRowData(rowStream)
+        // 4. 调用官方 FlinkSink，并锁定 writeParallelism！返回 DataStreamSink 实例
+        DataStreamSink<RowData> sink = FlinkSink.forRowData(rowStream)
                 .tableLoader(tableLoader)
                 .hadoopConf(hadoopConf)
-                .writeParallelism(1) // 🎯 核心控制点：收敛为单一 Writer，消灭小文件碎片
+                .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
                 .append();
 
-        LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, "raw_sms_records");
+        LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
+        return sink;
     }
 }
 ```
@@ -240,19 +300,20 @@ public class IcebergR2SinkFactory {
 
 ### 4.3 工序 ③：流水线拓扑装配 (`SmsGmailR2Pipeline`)
 * **包路径**：`com.finance.etl.pipeline`
-* **设计定位**：纯粹的有向无环图编排。负责将 Source 算子、Parser 清洗算子与 Iceberg Sink 拼接闭环：
+* **设计定位**：纯粹的有向无环图编排。支持通过构造函数或方法注入 `IcebergR2Sink` 实例：
 
 ```java
-public void assembleAndAttachSink(StreamExecutionEnvironment env) {
+public DataStreamSink<RowData> assembleAndAttachSink(StreamExecutionEnvironment env, IcebergR2Sink sink) {
     // 1. 构建抽取与规整流 (并发度 = 2)
     DataStream<SmsRecord> smsStream = buildStream(env);
 
-    // 2. 转换为列式 RowData 并挂载单并发写入 Sink
+    // 2. 转换为列式 RowData
     DataStream<RowData> rowStream = smsStream
             .map(new SmsRecordToRowDataMapper())
             .name("SmsRecord-To-RowData-Mapper");
 
-    IcebergR2SinkFactory.attach(rowStream);
+    // 3. 挂载写端并返回 DataStreamSink 实例
+    return sink.append(rowStream);
 }
 ```
 

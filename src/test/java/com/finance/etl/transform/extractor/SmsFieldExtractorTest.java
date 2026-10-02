@@ -49,6 +49,11 @@ class SmsFieldExtractorTest {
         aliEmail.setBody("支付宝交易动账");
         assertEquals("ALIPAY", extractor.extract(aliEmail).get("sender"));
 
+        RawEmail hsbcEmail = new RawEmail();
+        hsbcEmail.setSubject("106910095366");
+        hsbcEmail.setBody("【汇丰银行中国】温馨提示：您尾号0025的美元信用卡当月账单为5.99元");
+        assertEquals("HSBC", extractor.extract(hsbcEmail).get("sender"));
+
         RawEmail otherEmail = new RawEmail();
         otherEmail.setSubject("10010");
         otherEmail.setBody("中国联通通知");

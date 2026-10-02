@@ -1,0 +1,149 @@
+package com.finance.etl.sink.iceberg;
+
+import com.finance.etl.util.ConfigUtils;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSink;
+import org.apache.flink.table.data.RowData;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.flink.CatalogLoader;
+import org.apache.iceberg.flink.TableLoader;
+import org.apache.iceberg.flink.sink.FlinkSink;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * Apache Iceberg on Cloudflare R2 湖仓落盘写端门面实体 (IcebergR2Sink)
+ * 职责：与读端 ImapSource 形成绝对镜像对称规范。
+ * 持有向 Cloudflare R2 (S3A 协议) 与 CockroachDB (JDBC Catalog) 写入数据所需的全部连接元数据。
+ * 提供 append(DataStream<RowData>) 行为方法，挂载官方两阶段提交 (2PC) 算子链并返回标准的 DataStreamSink 算子节点。
+ */
+public class IcebergR2Sink implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private static final Logger LOG = LoggerFactory.getLogger(IcebergR2Sink.class);
+
+    private final String endpoint;
+    private final String accessKey;
+    private final String secretKey;
+    private final String catalogUri;
+    private final String catalogUser;
+    private final String catalogPassword;
+    private final String warehouseDir;
+    private final String catalogName;
+    private final String schemaName;
+    private final String tableName;
+    private final int writeParallelism;
+
+    public IcebergR2Sink(String endpoint, String accessKey, String secretKey,
+                         String catalogUri, String catalogUser, String catalogPassword,
+                         String warehouseDir, String catalogName,
+                         String schemaName, String tableName, int writeParallelism) {
+        this.endpoint = Objects.requireNonNull(endpoint, "R2 endpoint must not be null");
+        this.accessKey = Objects.requireNonNull(accessKey, "R2 access key must not be null");
+        this.secretKey = Objects.requireNonNull(secretKey, "R2 secret key must not be null");
+        this.catalogUri = Objects.requireNonNull(catalogUri, "Catalog URI must not be null");
+        this.catalogUser = Objects.requireNonNull(catalogUser, "Catalog user must not be null");
+        this.catalogPassword = Objects.requireNonNull(catalogPassword, "Catalog password must not be null");
+        this.warehouseDir = warehouseDir;
+        this.catalogName = catalogName;
+        this.schemaName = schemaName;
+        this.tableName = tableName;
+        this.writeParallelism = writeParallelism;
+    }
+
+    /**
+     * 工厂方法：直接从环境变量 / .env 中装配并返回一个配置就绪的 IcebergR2Sink 实体实例
+     */
+    public static IcebergR2Sink fromConfig() {
+        return new IcebergR2Sink(
+                ConfigUtils.get("R2_S3_ENDPOINT", ""),
+                ConfigUtils.get("R2_S3_ACCESS_KEY_ID", ""),
+                ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_URI", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_USER", ""),
+                ConfigUtils.get("ICEBERG_CATALOG_PASSWORD", ""),
+                ConfigUtils.get("ICEBERG_WAREHOUSE_DIR", "s3a://sms-flink-etl/iceberg/warehouse"),
+                ConfigUtils.get("ICEBERG_CATALOG_NAME", "finance"),
+                ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev"),
+                "raw_sms_records",
+                1 // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
+        );
+    }
+
+    /**
+     * 核心行为方法：将上游 RowData 列式数据流挂载写入 Iceberg 表，返回 Flink 官方 DataStreamSink 算子节点
+     *
+     * @param rowStream 已完成字段投影映射的 DataStream<RowData>
+     * @return 挂载完成的 DataStreamSink<Void>
+     */
+    public DataStreamSink<Void> append(DataStream<RowData> rowStream) {
+        Objects.requireNonNull(rowStream, "Input DataStream<RowData> must not be null");
+
+        LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={})...",
+                schemaName, tableName, writeParallelism);
+
+        // 1. 组装 Hadoop S3A 文件系统配置 (直连 Cloudflare R2)
+        Configuration hadoopConf = new Configuration();
+        hadoopConf.set("fs.s3a.endpoint", endpoint);
+        hadoopConf.set("fs.s3a.access.key", accessKey);
+        hadoopConf.set("fs.s3a.secret.key", secretKey);
+        hadoopConf.set("fs.s3a.path.style.access", "true");
+        hadoopConf.set("fs.s3a.connection.ssl.enabled", "true");
+        hadoopConf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+        hadoopConf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"); // 🎯 兼容 s3:// 协议前缀
+        hadoopConf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+
+        // 2. 组装 JDBC CatalogLoader (CockroachDB iceberg-catalog 元数据中心)
+        Map<String, String> catalogProperties = new HashMap<>();
+        catalogProperties.put("type", "jdbc");
+        catalogProperties.put("uri", catalogUri);
+        catalogProperties.put("jdbc.user", catalogUser);
+        catalogProperties.put("jdbc.password", catalogPassword);
+        catalogProperties.put("warehouse", warehouseDir);
+
+        CatalogLoader catalogLoader = CatalogLoader.custom(
+                catalogName,
+                catalogProperties,
+                hadoopConf,
+                "org.apache.iceberg.jdbc.JdbcCatalog"
+        );
+
+        // 3. 动态载入目标表元数据
+        TableIdentifier tableId = TableIdentifier.of(schemaName, tableName);
+        TableLoader tableLoader = TableLoader.fromCatalog(catalogLoader, tableId);
+
+        // 4. 调用官方 FlinkSink，并显式锁定 writeParallelism(1)！返回 DataStreamSink 实例
+        DataStreamSink<Void> sink = FlinkSink.forRowData(rowStream)
+                .tableLoader(tableLoader)
+                .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
+                .append();
+
+        LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
+        return sink;
+    }
+
+    public String getEndpoint() {
+        return endpoint;
+    }
+
+    public String getCatalogUri() {
+        return catalogUri;
+    }
+
+    public String getSchemaName() {
+        return schemaName;
+    }
+
+    public String getTableName() {
+        return tableName;
+    }
+
+    public int getWriteParallelism() {
+        return writeParallelism;
+    }
+}

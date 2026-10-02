@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * 2. 渠道发送方识别器 (SenderExtractor)
- * 职责：依据邮件主题与正文特征，启发式识别发送渠道 (95508, WECHAT_PAY, ALIPAY, 95555, 95566, OTHER)。
+ * 职责：依据邮件主题与正文特征，启发式识别发送渠道 (95508, WECHAT_PAY, ALIPAY, 95555, 95566, HSBC, OTHER)。
  */
 public class SenderExtractor implements SmsFieldExtractor {
     private static final long serialVersionUID = 1L;
@@ -31,6 +31,8 @@ public class SenderExtractor implements SmsFieldExtractor {
             sender = "95555";
         } else if (fullContent.contains("95566") || fullContent.contains("中国银行")) {
             sender = "95566";
+        } else if (fullContent.contains("95366") || fullContent.contains("汇丰银行") || fullContent.contains("汇丰中国") || fullContent.contains("HSBC")) {
+            sender = "HSBC";
         }
 
         return Map.of("sender", sender);

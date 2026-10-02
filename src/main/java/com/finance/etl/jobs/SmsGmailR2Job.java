@@ -2,6 +2,7 @@ package com.finance.etl.jobs;
 
 import com.finance.etl.model.SmsRecord;
 import com.finance.etl.pipeline.SmsGmailR2Pipeline;
+import com.finance.etl.sink.iceberg.IcebergR2Sink;
 import com.finance.etl.source.imap.ImapSource;
 import com.finance.etl.transform.DemoEmailSubjectParser;
 import com.finance.etl.util.ConfigUtils;
@@ -10,6 +11,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.data.RowData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,16 +46,22 @@ public class SmsGmailR2Job {
         LOG.info("⚡ [Flink Runtime] Configured parallelism: {} slot thread(s) (TaskExecutor slots aligned: {})",
                 parallelism, parallelism);
 
-        // 2. 组装实体对象 (FLIP-27 Source + Demo Parser -> Pipeline)
+        // 2. 组装实体对象 (FLIP-27 Source + Demo Parser + Iceberg Sink -> Pipeline)
         ImapSource source = ImapSource.fromConfig();
         LOG.info("📧 Configured Gmail IMAP Buffer Account: {}", source.getUser());
 
         DemoEmailSubjectParser parser = new DemoEmailSubjectParser();
-        SmsGmailR2Pipeline pipeline = new SmsGmailR2Pipeline(source, parser);
+        IcebergR2Sink sink = IcebergR2Sink.fromConfig();
+        SmsGmailR2Pipeline pipeline = new SmsGmailR2Pipeline(source, parser, sink);
 
-        // 3. 编排并挂载数据流
+        // 3. 编排并挂载数据流 (同时保留 stdout 打印方便日志观测，并挂载 Iceberg 湖仓 Sink 落盘)
         DataStream<SmsRecord> smsStream = pipeline.buildStream(env);
         smsStream.print();
+
+        DataStream<RowData> rowStream = smsStream
+                .map(new com.finance.etl.sink.iceberg.SmsRecordToRowDataMapper())
+                .name("SmsRecord-To-RowData-Mapper");
+        sink.append(rowStream);
 
         // 4. 提交作业执行
         LOG.info("🚀 Submitting sms-gmail-r2 JobGraph to Flink execution runtime...");
