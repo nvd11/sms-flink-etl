@@ -39,8 +39,44 @@ WITH (
     format = 'PARQUET'
 );
 
+-- 4. DWD 金融动账明细事实表 (Data Warehouse Detail · 纯粹金融领域明细资产)
+CREATE TABLE IF NOT EXISTS iceberg.finance.dwd_financial_transactions (
+    -- 1. 业务主键与血缘追溯 (Lineage)
+    tx_id               VARCHAR,                             -- 动账唯一流水号 (如 'tx_317')
+    raw_record_id       BIGINT,                              -- 🎯 唯一血缘外键 (关联 raw_sms_records.id)
+
+    -- 2. 时间维度 (Time Dimension · 权威交易时间)
+    tx_time             TIMESTAMP(6) WITH TIME ZONE,         -- 真实动账发生的物理时间 (带时区微秒戳)
+
+    -- 3. 金额与财务维度 (Financial Metrics)
+    amount              DECIMAL(12, 2),                      -- 交易金额 (高精度数字，严格杜绝浮点失真)
+    currency            VARCHAR,                             -- 币种标准三字码: 'CNY', 'HKD', 'USD' (默认 CNY)
+    direction           VARCHAR,                             -- 资金方向: 'OUTFLOW' (支出), 'INFLOW' (收入)
+    tx_type             VARCHAR,                             -- 交易明细类型: 'EXPENSE' (消费), 'INCOME' (收入), 'TRANSFER' (转账), 'REFUND' (退款)
+
+    -- 4. 账户与渠道维度 (Account & Institution)
+    institution         VARCHAR,                             -- 金融机构代号: 'CGB', 'BOC', 'HSBC', 'ICBC', 'WECHAT_PAY', 'ALIPAY'
+    account_type        VARCHAR,                             -- 账户类型: 'CREDIT_CARD', 'DEBIT_CARD', 'WALLET', 'LOAN'
+    card_tail           VARCHAR,                             -- 卡号/账户尾号: 如 '3342'
+    payment_channel     VARCHAR,                             -- 支付通路: 'ALIPAY', 'WECHAT_PAY', 'UNIONPAY', 'DIRECT'
+
+    -- 5. 对手方与消费场景维度 (Merchant & Categorization)
+    counterparty        VARCHAR,                             -- 交易对手/商户原名 (如: '财付通-煲珠公收款')
+    cleaned_merchant    VARCHAR,                             -- 智能提取纯净商户名 (如: '煲珠公')
+    category            VARCHAR,                             -- 消费大类: 'FOOD', 'TRANSPORT', 'SHOPPING', 'MEDICAL', 'OTHER'
+
+    -- 6. 治理与审计元数据 (Auditing)
+    is_valid_tx         BOOLEAN,                             -- 是否为有效动账 (区分真实交易与验证码/营销提醒)
+    etl_created_at      TIMESTAMP(6) WITH TIME ZONE          -- 清洗入湖时间戳
+)
+WITH (
+    format = 'PARQUET',                                      -- 底层列式存储: Parquet 列存
+    partitioning = ARRAY['month(tx_time)'],                  -- 🎯 依托 Iceberg 隐藏分区，原生支撑极速范围剪枝
+    sorted_by = ARRAY['tx_time DESC']                        -- 块内按交易时间倒序排列
+);
+
 -- ====================================================================
--- 4. Trino 高级查询与湖仓运维实操参考
+-- 5. Trino 高级查询与湖仓运维实操参考
 -- ====================================================================
 
 -- 4.1 批处理增量水位探查 (查询当前数据源的最新同步位点)

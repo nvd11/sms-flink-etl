@@ -7,21 +7,22 @@ on:
     paths:
       - 'scripts/schema.sql'
       - 'scripts/schema-dev.sql'
+      - 'scripts/schema-dwd.sql'
   workflow_dispatch:
     inputs:
       target_env:
         description: 'Target Lakehouse Environment to sync'
         required: true
-        default: 'dev'
+        default: 'all'
         type: choice
         options:
+          - all
           - dev
           - prod
-          - all
 
 jobs:
   sync-schema:
-    name: Sync Schema (${{ github.event.inputs.target_env || 'push-auto' }})
+    name: Sync Schema (${{ github.event.inputs.target_env || 'all' }})
     runs-on: ubuntu-latest
 
     steps:
@@ -37,7 +38,7 @@ jobs:
         env:
           TRINO_URL: ${{ secrets.TRINO_URL || 'https://trino.jppwl.asia' }}
           TRINO_USER: ${{ secrets.TRINO_USER || 'github-actions-sync' }}
-          TARGET_ENV: ${{ github.event.inputs.target_env || 'dev' }}
+          TARGET_ENV: ${{ github.event.inputs.target_env || 'all' }}
         run: |
           echo "================================================================="
           echo "🚀 Executing Iceberg Schema Sync on Trino: $TRINO_URL"
