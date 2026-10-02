@@ -285,11 +285,18 @@ public class IcebergR2Sink implements Serializable {
         TableIdentifier tableId = TableIdentifier.of(schemaName, tableName);
         TableLoader tableLoader = TableLoader.fromCatalog(catalogLoader, tableId);
 
-        // 4. 调用官方 FlinkSink，并锁定 writeParallelism！返回 DataStreamSink 实例
-        DataStreamSink<Void> sink = FlinkSink.forRowData(rowStream)
+        // 4. 调用官方 FlinkSink，并锁定 writeParallelism！支持基于 Equality Deletes 的原生原子 Upsert
+        FlinkSink.Builder builder = FlinkSink.forRowData(rowStream)
                 .tableLoader(tableLoader)
-                .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
-                .append();
+                .writeParallelism(writeParallelism); // 🎯 核心控制点：收敛为单一 Writer
+
+        if (upsert && !equalityColumns.isEmpty()) {
+            LOG.info("🛡️ [Iceberg Sink] Enabling native Equality Delete Upsert on columns: {}", equalityColumns);
+            builder.upsert(true)
+                   .equalityFieldColumns(equalityColumns); // 🎯 [msg_uid, received_at] 覆盖业务唯一指纹与分区源字段
+        }
+
+        DataStreamSink<Void> sink = builder.append();
 
         LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
         return sink;

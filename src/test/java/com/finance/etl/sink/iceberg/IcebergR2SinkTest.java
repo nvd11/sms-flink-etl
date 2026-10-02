@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class IcebergR2SinkTest {
 
     @Test
-    @DisplayName("测试从环境配置装配 IcebergR2Sink 门面实体：验证 writeParallelism=1 核心约束")
+    @DisplayName("测试从环境配置装配 IcebergR2Sink 门面实体：验证 writeParallelism=1 与 Upsert 默认配置")
     void testFromConfig() {
         IcebergR2Sink sink = IcebergR2Sink.fromConfig();
 
@@ -17,6 +17,9 @@ class IcebergR2SinkTest {
         assertEquals(1, sink.getWriteParallelism(), "写端并发度必须严格锁定为 1 (漏斗形单写策略)");
         assertEquals("raw_sms_records", sink.getTableName(), "默认目标表必须为 raw_sms_records");
         assertEquals("finance_dev", sink.getSchemaName(), "开发测试环境下默认 schema 为 finance_dev");
+        assertTrue(sink.isUpsert(), "默认应开启 Iceberg 原生 Upsert 模式");
+        assertTrue(sink.getEqualityColumns().contains("msg_uid"), "默认 equality column 必须包含 msg_uid");
+        assertTrue(sink.getEqualityColumns().contains("received_at"), "默认 equality column 必须包含分区源字段 received_at");
         assertNotNull(sink.getEndpoint());
         assertNotNull(sink.getCatalogUri());
     }

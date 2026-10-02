@@ -16,9 +16,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Apache Iceberg on Cloudflare R2 湖仓落盘写端门面实体 (IcebergR2Sink)
@@ -41,11 +40,20 @@ public class IcebergR2Sink implements Serializable {
     private final String schemaName;
     private final String tableName;
     private final int writeParallelism;
+    private final boolean upsert;
+    private final List<String> equalityColumns;
 
     public IcebergR2Sink(String schemaName, String tableName, int writeParallelism) {
+        this(schemaName, tableName, writeParallelism, true, List.of("msg_uid", "received_at"));
+    }
+
+    public IcebergR2Sink(String schemaName, String tableName, int writeParallelism,
+                         boolean upsert, List<String> equalityColumns) {
         this.schemaName = Objects.requireNonNull(schemaName, "Schema name must not be null");
         this.tableName = Objects.requireNonNull(tableName, "Table name must not be null");
         this.writeParallelism = writeParallelism;
+        this.upsert = upsert;
+        this.equalityColumns = equalityColumns != null ? List.copyOf(equalityColumns) : Collections.emptyList();
         this.endpoint = ConfigUtils.get("R2_S3_ENDPOINT", "");
         this.accessKey = ConfigUtils.get("R2_S3_ACCESS_KEY_ID", "");
         this.secretKey = ConfigUtils.get("R2_S3_SECRET_ACCESS_KEY", "");
@@ -60,6 +68,15 @@ public class IcebergR2Sink implements Serializable {
                          String catalogUri, String catalogUser, String catalogPassword,
                          String warehouseDir, String catalogName,
                          String schemaName, String tableName, int writeParallelism) {
+        this(endpoint, accessKey, secretKey, catalogUri, catalogUser, catalogPassword,
+                warehouseDir, catalogName, schemaName, tableName, writeParallelism, true, List.of("msg_uid", "received_at"));
+    }
+
+    public IcebergR2Sink(String endpoint, String accessKey, String secretKey,
+                         String catalogUri, String catalogUser, String catalogPassword,
+                         String warehouseDir, String catalogName,
+                         String schemaName, String tableName, int writeParallelism,
+                         boolean upsert, List<String> equalityColumns) {
         this.endpoint = Objects.requireNonNull(endpoint, "R2 endpoint must not be null");
         this.accessKey = Objects.requireNonNull(accessKey, "R2 access key must not be null");
         this.secretKey = Objects.requireNonNull(secretKey, "R2 secret key must not be null");
@@ -68,19 +85,30 @@ public class IcebergR2Sink implements Serializable {
         this.catalogPassword = Objects.requireNonNull(catalogPassword, "Catalog password must not be null");
         this.warehouseDir = warehouseDir;
         this.catalogName = catalogName;
-        this.schemaName = schemaName;
-        this.tableName = tableName;
+        this.schemaName = Objects.requireNonNull(schemaName, "Schema name must not be null");
+        this.tableName = Objects.requireNonNull(tableName, "Table name must not be null");
         this.writeParallelism = writeParallelism;
+        this.upsert = upsert;
+        this.equalityColumns = equalityColumns != null ? List.copyOf(equalityColumns) : Collections.emptyList();
     }
 
     /**
      * 工厂方法：直接从环境变量 / .env 中装配并返回一个配置就绪的 IcebergR2Sink 实体实例
      */
     public static IcebergR2Sink fromConfig() {
+        boolean upsert = ConfigUtils.getBoolean("ICEBERG_UPSERT_ENABLED", true);
+        String equalityColStr = ConfigUtils.get("ICEBERG_UPSERT_EQUALITY_COLUMNS", "msg_uid,received_at");
+        List<String> equalityColumns = Arrays.stream(equalityColStr.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
+
         return new IcebergR2Sink(
                 ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev"),
                 "raw_sms_records",
-                1 // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
+                1, // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
+                upsert,
+                equalityColumns
         );
     }
 
@@ -93,17 +121,24 @@ public class IcebergR2Sink implements Serializable {
     public DataStreamSink<Void> append(DataStream<RowData> rowStream) {
         Objects.requireNonNull(rowStream, "Input DataStream<RowData> must not be null");
 
-        LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={})...",
-                schemaName, tableName, writeParallelism);
+        LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={}, upsert={}, equalityColumns={})...",
+                schemaName, tableName, writeParallelism, upsert, equalityColumns);
 
         // 🎯 核心委托：底层 S3A 文件系统、JDBC Catalog 与 TableLoader 装配全部收敛于工厂单一真理源
         TableLoader tableLoader = IcebergCatalogFactory.createTableLoader(schemaName, tableName);
 
         // 调用官方 FlinkSink，并显式锁定 writeParallelism(1)！返回 DataStreamSink 实例
-        DataStreamSink<Void> sink = FlinkSink.forRowData(rowStream)
+        FlinkSink.Builder builder = FlinkSink.forRowData(rowStream)
                 .tableLoader(tableLoader)
-                .writeParallelism(writeParallelism) // 🎯 核心控制点：收敛为单一 Writer
-                .append();
+                .writeParallelism(writeParallelism); // 🎯 核心控制点：收敛为单一 Writer
+
+        if (upsert && !equalityColumns.isEmpty()) {
+            LOG.info("🛡️ [Iceberg Sink] Enabling native Equality Delete Upsert on columns: {}", equalityColumns);
+            builder.upsert(true)
+                   .equalityFieldColumns(equalityColumns);
+        }
+
+        DataStreamSink<Void> sink = builder.append();
 
         LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
         return sink;
@@ -158,5 +193,13 @@ public class IcebergR2Sink implements Serializable {
 
     public int getWriteParallelism() {
         return writeParallelism;
+    }
+
+    public boolean isUpsert() {
+        return upsert;
+    }
+
+    public List<String> getEqualityColumns() {
+        return equalityColumns;
     }
 }
