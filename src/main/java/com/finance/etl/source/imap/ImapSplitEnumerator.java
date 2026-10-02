@@ -344,25 +344,8 @@ public class ImapSplitEnumerator implements SplitEnumerator<ImapSplit, Void> {
                 LOG.info("📦 [JobManager Master] Sliced {} UIDs into {} parallel splits (chunkSize: {}) across parallelism {}.",
                         uids.size(), getPendingSplitsCount(), chunkSize, parallelism);
             } else {
-                // 两种模式均无增量数据时，拉取最近 5 封邮件用于批处理探活验证
-                int totalCount = inbox.getMessageCount();
-                if (totalCount > 0 && inbox instanceof UIDFolder) {
-                    UIDFolder uidFolder = (UIDFolder) inbox;
-                    int start = Math.max(1, totalCount - 4);
-                    Message[] recent = inbox.getMessages(start, totalCount);
-
-                    FetchProfile fp = new FetchProfile();
-                    fp.add(UIDFolder.FetchProfileItem.UID);
-                    inbox.fetch(recent, fp);
-
-                    for (Message m : recent) {
-                        uids.add(uidFolder.getUID(m));
-                    }
-                }
-                splitsBySubtask.computeIfAbsent(0, k -> new ArrayDeque<>())
-                        .add(new ImapSplit("split-verify-" + System.currentTimeMillis(), "INBOX", uids));
-                LOG.info("ℹ️ [JobManager Master] No new emails found. Generated verification split with {} recent UIDs.",
-                        uids.size());
+                LOG.info("ℹ️ [JobManager Master] No new emails found (watermark is up-to-date at UID: {}). 0 splits generated, pipeline terminating cleanly.",
+                        lastSyncedUid);
             }
         } catch (Exception e) {
             LOG.warn("⚠️ [JobManager Master] Failed to probe IMAP: {}. Emitting empty fallback split.", e.getMessage());
