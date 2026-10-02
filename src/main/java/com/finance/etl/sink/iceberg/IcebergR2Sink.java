@@ -1,5 +1,6 @@
 package com.finance.etl.sink.iceberg;
 
+import com.finance.etl.model.SyncOffset;
 import com.finance.etl.util.ConfigUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
@@ -125,6 +126,37 @@ public class IcebergR2Sink implements Serializable {
 
         LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
         return sink;
+    }
+
+    /**
+     * 步骤 2：推进水位表 (只有在批处理作业 env.execute() 彻底成功后才被触发)
+     *
+     * @param jobName 作业标识，例如 'sms-gmail-r2'
+     * @param channel 数据通道，例如 'EMAIL_IMAP'
+     * @param target  目标标识，例如 'alice.h.y.he@gmail.com'
+     * @param maxUid  本次成功入库的最大 UID (由 Flink 累加器汇聚得出)
+     */
+    public void commitOffset(String jobName, String channel, String target, long maxUid) {
+        if (maxUid <= 0L) {
+            LOG.info("ℹ️ [Iceberg Sink] No new records processed in this batch (maxUid={}). Watermark remains unchanged.", maxUid);
+            return;
+        }
+
+        try (IcebergOffsetRepository repo = IcebergOffsetRepository.fromConfig()) {
+            SyncOffset offset = new SyncOffset(
+                    jobName,
+                    channel,
+                    target,
+                    maxUid,
+                    java.time.Instant.now(),
+                    java.time.Instant.now()
+            );
+            repo.saveOffset(offset);
+            LOG.info("🌊 [Iceberg Sink] Successfully advanced lakehouse watermark to UID: {}", maxUid);
+        } catch (Exception e) {
+            LOG.error("❌ [Iceberg Sink] Failed to advance watermark to {}: {}", maxUid, e.getMessage(), e);
+            throw new RuntimeException("Failed to commit offset to Iceberg lakehouse", e);
+        }
     }
 
     public String getEndpoint() {

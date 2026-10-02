@@ -3,7 +3,9 @@ package com.finance.etl.transform;
 import com.finance.etl.model.RawEmail;
 import com.finance.etl.model.SmsRecord;
 import com.finance.etl.transform.extractor.*;
-import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.accumulators.LongMaximum;
+import org.apache.flink.api.common.functions.RichFlatMapFunction;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,13 +19,17 @@ import java.util.Map;
 /**
  * 管道化动账报文解析算子 (DemoEmailSubjectParser)
  * 职责：纯函数管道总调度器。
- * 遍历装配好的 SmsFieldExtractor 提取器族，将返回的 Map 字段字典自动聚合规整为 SmsRecord 实体。
+ * 1. 遍历装配好的 SmsFieldExtractor 提取器族，将返回的 Map 字段字典自动聚合规整为 SmsRecord 实体；
+ * 2. 挂载分布式累加器 (LongMaximum: "max-processed-uid")，零额外 I/O 感知批次全局最大 UID，供 Sink 后置推进水位。
  */
-public class DemoEmailSubjectParser implements FlatMapFunction<RawEmail, SmsRecord>, Serializable {
+public class DemoEmailSubjectParser extends RichFlatMapFunction<RawEmail, SmsRecord> implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(DemoEmailSubjectParser.class);
 
+    public static final String ACCUMULATOR_MAX_UID = "max-processed-uid";
+
     private final List<SmsFieldExtractor> extractors;
+    private final LongMaximum maxUidTracker = new LongMaximum();
 
     public DemoEmailSubjectParser() {
         this.extractors = List.of(
@@ -36,6 +42,12 @@ public class DemoEmailSubjectParser implements FlatMapFunction<RawEmail, SmsReco
 
     public DemoEmailSubjectParser(List<SmsFieldExtractor> extractors) {
         this.extractors = extractors != null ? extractors : List.of();
+    }
+
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
+        getRuntimeContext().addAccumulator(ACCUMULATOR_MAX_UID, maxUidTracker);
     }
 
     @Override
@@ -76,7 +88,12 @@ public class DemoEmailSubjectParser implements FlatMapFunction<RawEmail, SmsReco
                 record.getMsgUid() != null ? record.getMsgUid().substring(0, Math.min(8, record.getMsgUid().length())) : "N/A",
                 bodyPreview);
 
-        // 5. 发射给下游管道
+        // 5. 累加器零成本感知本批次最大 UID (多 Worker 并发上报，Master 终态 Merge-Max)
+        if (record.getId() != null) {
+            maxUidTracker.add(record.getId());
+        }
+
+        // 6. 发射给下游管道
         out.collect(record);
     }
 
@@ -97,5 +114,9 @@ public class DemoEmailSubjectParser implements FlatMapFunction<RawEmail, SmsReco
 
     public List<SmsFieldExtractor> getExtractors() {
         return extractors;
+    }
+
+    public LongMaximum getMaxUidTracker() {
+        return maxUidTracker;
     }
 }

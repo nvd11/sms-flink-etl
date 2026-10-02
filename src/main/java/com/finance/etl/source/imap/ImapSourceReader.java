@@ -235,7 +235,9 @@ public class ImapSourceReader implements SourceReader<RawEmail, ImapSplit> {
                 }
             }
         } catch (Exception e) {
-            LOG.warn("⚠️ Failed to execute IMAP split fetch: {}", e.getMessage());
+            LOG.error("❌ [Worker Slot {}] Failed to execute IMAP split fetch for split {}: {}",
+                    context.getIndexOfSubtask(), split.splitId(), e.getMessage(), e);
+            throw new RuntimeException("IMAP split fetch failed for " + split.splitId(), e);
         } finally {
             try {
                 if (folder != null && folder.isOpen()) folder.close(false);

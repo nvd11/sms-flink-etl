@@ -6,6 +6,7 @@ import com.finance.etl.sink.iceberg.IcebergR2Sink;
 import com.finance.etl.source.imap.ImapSource;
 import com.finance.etl.transform.DemoEmailSubjectParser;
 import com.finance.etl.util.ConfigUtils;
+import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
@@ -63,9 +64,14 @@ public class SmsGmailR2Job {
                 .name("SmsRecord-To-RowData-Mapper");
         sink.append(rowStream);
 
-        // 4. 提交作业执行
+        // 4. 提交作业执行 (步骤 1：业务数据写入落盘，阻塞等待全部 TaskSlot 跑完)
         LOG.info("🚀 Submitting sms-gmail-r2 JobGraph to Flink execution runtime...");
-        env.execute("SMS-Gmail-R2-Lakehouse-Batch-Job");
+        JobExecutionResult executionResult = env.execute("SMS-Gmail-R2-Lakehouse-Batch-Job");
+
+        // 5. 提交水位位点 (步骤 2：作业 100% 成功后，从分布式累加器提取最大 UID 推进水位，严格保障 At-Least-Once)
+        Long maxUid = executionResult.getAccumulatorResult(DemoEmailSubjectParser.ACCUMULATOR_MAX_UID);
+        LOG.info("🌊 [Job Completion] Batch executed successfully. Global MAX(UID) from accumulator: {}", maxUid);
+        sink.commitOffset("sms-gmail-r2", "EMAIL_IMAP", source.getUser(), maxUid != null ? maxUid : 0L);
 
         LOG.info("================================================================================");
         LOG.info("✅ SMS Gmail to R2 Batch Job Execution Finished Successfully!");

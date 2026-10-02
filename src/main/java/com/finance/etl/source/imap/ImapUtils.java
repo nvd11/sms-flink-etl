@@ -28,8 +28,8 @@ public final class ImapUtils {
         props.put("mail.imaps.host", host);
         props.put("mail.imaps.port", String.valueOf(port));
         props.put("mail.imaps.ssl.enable", "true");
-        props.put("mail.imaps.connectiontimeout", "5000"); // 5秒建连超时
-        props.put("mail.imaps.timeout", "5000");           // 5秒读取超时
+        props.put("mail.imaps.connectiontimeout", "10000"); // 10秒建连握手超时
+        props.put("mail.imaps.timeout", "30000");           // 30秒报文下载超时 (整包批量拉取100封防掐线)
         props.put("mail.imaps.fetchsize", "1048576");      // 1MB 预取流式缓冲区
         props.put("mail.imaps.partialfetch", "false");     // 强制整包批量下载，避免高频交互
         props.put("mail.imaps.ssl.socketFactory.fallback", "false");

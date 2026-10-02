@@ -32,4 +32,14 @@ class IcebergR2SinkTest {
                 "endpoint", null, "sk", "uri", "user", "pass", "s3a://wh", "finance", "finance_dev", "table", 1
         ));
     }
+
+    @Test
+    @DisplayName("测试 commitOffset 在 maxUid <= 0 时安全跳过，不发起网络提交")
+    void testCommitOffsetZeroSafelySkips() {
+        IcebergR2Sink sink = IcebergR2Sink.fromConfig();
+        assertDoesNotThrow(() -> {
+            sink.commitOffset("test-job", "EMAIL_IMAP", "test@gmail.com", 0L);
+            sink.commitOffset("test-job", "EMAIL_IMAP", "test@gmail.com", -1L);
+        }, "maxUid <= 0 时应安全跳过且不抛出异常");
+    }
 }
