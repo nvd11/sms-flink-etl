@@ -6,7 +6,7 @@ on:
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
-        default: ''
+        default: 'ghcr.io/nvd11/sms-gmail-r2-job:latest'
 
 permissions:
   contents: read
@@ -49,9 +49,14 @@ jobs:
           fi
           echo "✅ Job dispatched to K3s successfully!"
 
-          # 4. 轮询等待 Job 执行完成并打印日志 (等待拉取与计算，最多 120 秒)
+          # 4. 轮询等待 Job 执行完成并打印日志 (最多 180 秒)
           echo "⏳ Waiting for batch execution to complete on NUC..."
-          ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=120s job/${JOB_NAME} -n batch-jobs"
+          if ! ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl wait --for=condition=complete --timeout=180s job/${JOB_NAME} -n batch-jobs"; then
+            echo "❌ Job did not complete in time. Inspecting pod status and logs:"
+            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl describe pods -n batch-jobs -l job-name=${JOB_NAME} || true"
+            ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100 || true"
+            exit 1
+          fi
 
           # 5. 获取 Pod 输出日志并记录到 Summary
           LOGS=$(ssh "${SSH_USER}@${SSH_HOST}" "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
