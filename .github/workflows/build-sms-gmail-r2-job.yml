@@ -4,13 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - "src/main/java/com/finance/etl/jobs/SmsGmailR2Job.java"
-      - "src/main/java/com/finance/etl/pipeline/**"
-      - "src/main/java/com/finance/etl/source/**"
-      - "src/main/java/com/finance/etl/transform/**"
-      - "src/main/java/com/finance/etl/model/**"
-      - "src/main/java/com/finance/etl/util/**"
-      - "src/main/resources/**"
+      - "src/main/**"
       - "pom.xml"
       - "Dockerfile"
       - ".github/workflows/build-sms-gmail-r2-job.yml"
