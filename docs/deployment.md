@@ -75,9 +75,13 @@
   * **Payload Body**:
     ```json
     {
-      "ref": "main"
+      "ref": "main",
+      "inputs": {
+        "target_env": "finance"
+      }
     }
     ```
+    *(注：若 `inputs` 省略或留空，工作流默认自动路由至生产库 `finance`，若需跑测试库可指定 `"target_env": "finance_dev"`)*
 
 ### 2.2 GitHub Actions 调度中枢工作流 (`.github/workflows/trigger-nuc-batch-runner.yml`)
 ```yaml

@@ -3,6 +3,14 @@ name: Trigger NUC Batch Runner
 on:
   workflow_dispatch:
     inputs:
+      target_env:
+        description: 'Target Lakehouse Schema Environment (finance for Prod, finance_dev for Dev)'
+        required: false
+        default: 'finance'
+        type: choice
+        options:
+          - finance
+          - finance_dev
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
@@ -23,35 +31,44 @@ jobs:
           SSH_HOST: ${{ secrets.K3S_SSH_HOST }}
           SSH_USER: ${{ secrets.K3S_SSH_USER }}
           SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
+          TARGET_ENV: ${{ inputs.target_env || 'finance' }}
           OVERRIDE_IMAGE: ${{ inputs.image }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
 
-          # 1. 建立临时 SSH 密钥环境
+          # 1. 建立临时 SSH 密钥环境与 ControlMaster 长连接复用通道
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          SSH_OPT="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectionAttempts=3"
+          cat << 'EOF' >> ~/.ssh/config
+          Host *
+            ControlMaster auto
+            ControlPath ~/.ssh/cm-%r@%h:%p
+            ControlPersist 10m
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 15
+            ServerAliveInterval 15
+            ServerAliveCountMax 3
+            ConnectionAttempts 3
+          EOF
+
           run_ssh() {
-            ssh $SSH_OPT "${SSH_USER}@${SSH_HOST}" "$@"
+            ssh "${SSH_USER}@${SSH_HOST}" "$@"
           }
 
           JOB_NAME="nuc-run-${RUN_ID}"
-          echo "🚀 Preparing dispatch for Job: ${JOB_NAME}"
+          echo "🚀 Preparing dispatch for Job: ${JOB_NAME} (Target Schema: ${TARGET_ENV})"
 
-          # 2. 组装并执行拉起命令
-          if [ -n "$OVERRIDE_IMAGE" ]; then
-            echo "🎯 Overriding default image with: ${OVERRIDE_IMAGE}"
-            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
-              | jq --arg img "${OVERRIDE_IMAGE}" '.spec.template.spec.containers[0].image = $img' \
-              | run_ssh "sudo kubectl apply -f -"
-          else
-            echo "🎯 Using default baseline image defined in CronJob template"
-            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs"
-          fi
+          # 2. 动态组装并执行拉起命令 (精准覆盖 ICEBERG_CATALOG_SCHEMA 与镜像)
+          run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
+            | jq --arg schema "${TARGET_ENV}" --arg img "${OVERRIDE_IMAGE}" '
+                .spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) | map(select(.name != "ICEBERG_CATALOG_SCHEMA")) + [{"name": "ICEBERG_CATALOG_SCHEMA", "value": $schema}]) |
+                if ($img != "") then .spec.template.spec.containers[0].image = $img else . end
+              ' \
+            | run_ssh "sudo kubectl apply -f -"
           echo "✅ Job dispatched to K3s successfully!"
 
           # 4. 轮询等待 Job 执行完成并打印日志 (最多 180 秒)
