@@ -6,7 +6,7 @@ on:
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
-        default: 'ghcr.io/nvd11/sms-gmail-r2-job:latest'
+        default: 'ghcr.io/nvd11/sms-flink-batch-etl:latest'
 
 permissions:
   contents: read
