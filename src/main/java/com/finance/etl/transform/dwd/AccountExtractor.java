@@ -22,14 +22,14 @@ public class AccountExtractor implements DwdFieldExtractor {
     private static final Logger LOG = LoggerFactory.getLogger(AccountExtractor.class);
 
     private static final List<Pattern> CARD_TAIL_PATTERNS = List.of(
-            // 模式 1: 经典 "尾号3342", "尾号为0025", "卡号3342", "尾号卡3342"
-            Pattern.compile("(?:尾号|卡号|尾号为|尾号卡)\\s*([0-9]{4})"),
+            // 模式 1: 银行/金融卡尾号: "尾号3342信用卡", "尾号为0025的美元信用卡", "尾号3342的银行卡", "尾号为2501的账户"
+            Pattern.compile("尾号(?:为)?\\s*([0-9]{4})\\s*(?:的)?(?:信用卡|银行卡|储蓄卡|借记卡|账户|卡片|卡)"),
 
-            // 模式 2: 括号尾号: "信用卡(3342)", "银行卡(8888)"
-            Pattern.compile("(?:信用卡|银行卡|储蓄卡|卡)\\(([0-9]{4})\\)"),
+            // 模式 2: 紧贴卡种的尾号: "信用卡(3342)", "银行卡(8888)", "信用卡3342", "银行卡尾号3342"
+            Pattern.compile("(?:信用卡|银行卡|储蓄卡|借记卡)(?:尾号|卡号|\\()?([0-9]{4})\\)?"),
 
-            // 模式 3: "尾号为 3342 的银行卡"
-            Pattern.compile("尾号(?:为)?\\s*([0-9]{4})\\s*的?(?:信用卡|银行卡|储蓄卡)")
+            // 模式 3: 传统 "您尾号3342信用卡"
+            Pattern.compile("(?:您|客户)?尾号(?:为|卡)?\\s*([0-9]{4})")
     );
 
     @Override
@@ -39,6 +39,12 @@ public class AccountExtractor implements DwdFieldExtractor {
         }
 
         String text = record.getRawBody();
+
+        // 快递/运单/包裹等非金融短信直接排除卡尾提取，避免将运单尾号当成银行卡
+        if (text.contains("快递") || text.contains("运单") || text.contains("包裹") || text.contains("取件")) {
+            return Collections.emptyMap();
+        }
+
         Map<String, Object> result = new HashMap<>();
 
         // 1. 提取 4 位卡号尾号

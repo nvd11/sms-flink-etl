@@ -72,9 +72,11 @@ class TxTypeExtractorTest {
 
         int totalCount = 0;
         int typedCount = 0;
+        int untypedCount = 0;
         Map<String, Integer> directionCounts = new HashMap<>();
         Map<String, Integer> txTypeCounts = new HashMap<>();
-        List<String> auditLogs = new ArrayList<>();
+        List<String> allTypedLogs = new ArrayList<>();
+        List<String> allUntypedLogs = new ArrayList<>();
 
         System.out.println("================================================================================");
         System.out.println("📊 [Dev Lakehouse TxType Audit] Auditing direction and tx_type across all ODS records...");
@@ -105,23 +107,25 @@ class TxTypeExtractorTest {
                     directionCounts.put(direction, directionCounts.getOrDefault(direction, 0) + 1);
                     txTypeCounts.put(txType, txTypeCounts.getOrDefault(txType, 0) + 1);
 
-                    if (typedCount <= 25 || typedCount % 20 == 0) {
-                        auditLogs.add(String.format("[TYPED #%3d | ID:%3d | %-4s] => %-7s | %-8s | %s",
-                                typedCount, id, sender != null ? sender : "N/A", direction, txType,
-                                rawBody != null && rawBody.length() > 55 ? rawBody.substring(0, 55).replace("\n", " ") + "..." : rawBody));
-                    }
+                    allTypedLogs.add(String.format("[TYPED #%3d | ID:%3d | %-4s] => %-7s | %-8s | %s",
+                            typedCount, id, sender != null ? sender : "N/A", direction, txType, rawBody));
+                } else {
+                    untypedCount++;
+                    allUntypedLogs.add(String.format("[UNTYPED #%3d | ID:%3d | %-4s] | %s",
+                            untypedCount, id, sender != null ? sender : "N/A", rawBody));
                 }
             }
         }
 
-        for (String log : auditLogs) {
-            System.out.println(log);
-        }
+        // 保存全部详细日志供深度审计
+        java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/opencode/txtype_audit_all.txt"), allTypedLogs);
+        java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/opencode/txtype_audit_untyped.txt"), allUntypedLogs);
 
         System.out.println("================================================================================");
         System.out.println("📈 [TxType Audit Summary]");
         System.out.printf("  • 总扫描记录数 (Total ODS)       : %d 封\n", totalCount);
         System.out.printf("  • 识别出交易类型 (Typed Count)   : %d 笔\n", typedCount);
+        System.out.printf("  • 未识别/被过滤  (Untyped Count) : %d 封\n", untypedCount);
         System.out.println("  • 资金方向分布 (Direction)       : " + directionCounts);
         System.out.println("  • 细分类型分布 (Transaction Type): " + txTypeCounts);
         System.out.println("================================================================================");

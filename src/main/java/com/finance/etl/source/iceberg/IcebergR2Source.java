@@ -41,17 +41,23 @@ public class IcebergR2Source implements Serializable {
     private final Long startSnapshotId;
     private final Long endSnapshotId;
     private final Long minRecordId;
+    private final Long maxRecordId;
 
     public IcebergR2Source(String schemaName, String tableName) {
-        this(schemaName, tableName, null, null, null);
+        this(schemaName, tableName, null, null, null, null);
     }
 
     public IcebergR2Source(String schemaName, String tableName, Long startSnapshotId, Long endSnapshotId, Long minRecordId) {
+        this(schemaName, tableName, startSnapshotId, endSnapshotId, minRecordId, null);
+    }
+
+    public IcebergR2Source(String schemaName, String tableName, Long startSnapshotId, Long endSnapshotId, Long minRecordId, Long maxRecordId) {
         this.schemaName = Objects.requireNonNull(schemaName, "Schema name must not be null");
         this.tableName = Objects.requireNonNull(tableName, "Table name must not be null");
         this.startSnapshotId = startSnapshotId;
         this.endSnapshotId = endSnapshotId;
         this.minRecordId = minRecordId;
+        this.maxRecordId = maxRecordId;
     }
 
     /**
@@ -67,7 +73,16 @@ public class IcebergR2Source implements Serializable {
      */
     public static IcebergR2Source incrementalFromId(long minRecordId) {
         String schemaName = ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev");
-        return new IcebergR2Source(schemaName, "raw_sms_records", null, null, minRecordId);
+        return new IcebergR2Source(schemaName, "raw_sms_records", null, null, minRecordId, null);
+    }
+
+    /**
+     * 工厂方法：指定增量起始 recordId 与单批次最大拉取上限 (minRecordId < id <= minRecordId + batchSize)
+     */
+    public static IcebergR2Source incrementalFromId(long minRecordId, int batchSize) {
+        String schemaName = ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+        Long upperLimit = batchSize > 0 ? (minRecordId + batchSize) : null;
+        return new IcebergR2Source(schemaName, "raw_sms_records", null, null, minRecordId, upperLimit);
     }
 
     /**
@@ -96,8 +111,13 @@ public class IcebergR2Source implements Serializable {
 
         List<Expression> filters = new ArrayList<>();
         if (minRecordId != null && minRecordId > 0L) {
-            LOG.info("🎯 [Iceberg Source] Applying incremental filter: id > {}", minRecordId);
+            LOG.info("🎯 [Iceberg Source] Applying incremental lower-bound filter: id > {}", minRecordId);
             filters.add(Expressions.greaterThan("id", minRecordId));
+        }
+
+        if (maxRecordId != null && maxRecordId > 0L) {
+            LOG.info("🎯 [Iceberg Source] Applying incremental upper-bound filter: id <= {}", maxRecordId);
+            filters.add(Expressions.lessThanOrEqual("id", maxRecordId));
         }
 
         if (!filters.isEmpty()) {
@@ -127,10 +147,23 @@ public class IcebergR2Source implements Serializable {
         IcebergSource<RowData> source = buildSource();
         String sourceName = "Iceberg-" + schemaName + "-" + tableName + "-Source";
 
+        // 🎯 核心解决 Type Erasure：显式提供 RowData 的 TypeInformation
         return env.fromSource(
                 source,
                 WatermarkStrategy.noWatermarks(),
-                sourceName
+                sourceName,
+                org.apache.flink.table.runtime.typeutils.InternalTypeInfo.of(
+                        org.apache.flink.table.types.logical.RowType.of(
+                                new org.apache.flink.table.types.logical.BigIntType(),
+                                new org.apache.flink.table.types.logical.VarCharType(org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH),
+                                new org.apache.flink.table.types.logical.VarCharType(org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH),
+                                new org.apache.flink.table.types.logical.VarCharType(org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH),
+                                new org.apache.flink.table.types.logical.VarCharType(org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH),
+                                new org.apache.flink.table.types.logical.LocalZonedTimestampType(6),
+                                new org.apache.flink.table.types.logical.VarCharType(org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH),
+                                new org.apache.flink.table.types.logical.LocalZonedTimestampType(6)
+                        )
+                )
         );
     }
 

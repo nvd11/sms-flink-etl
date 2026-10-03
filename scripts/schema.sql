@@ -42,7 +42,7 @@ WITH (
 -- 4. DWD 金融动账明细事实表 (Data Warehouse Detail · 纯粹金融领域明细资产)
 CREATE TABLE IF NOT EXISTS iceberg.finance.dwd_financial_transactions (
     -- 1. 业务主键与血缘追溯 (Lineage)
-    tx_id               VARCHAR,                             -- 动账唯一流水号 (如 'tx_317')
+    id                  VARCHAR,                             -- 动账事实唯一标识主键 (如 'tx_317_1727957427000')
     raw_record_id       BIGINT,                              -- 🎯 唯一血缘外键 (关联 raw_sms_records.id)
 
     -- 2. 时间维度 (Time Dimension · 权威交易时间)

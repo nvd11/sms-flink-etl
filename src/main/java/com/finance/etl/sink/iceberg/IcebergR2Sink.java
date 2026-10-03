@@ -94,11 +94,33 @@ public class IcebergR2Sink implements Serializable {
     }
 
     /**
-     * 工厂方法：直接从环境变量 / .env 中装配并返回一个配置就绪的 IcebergR2Sink 实体实例
+     * 工厂方法：直接从环境变量 / .env 中装配并返回写入 ODS raw_sms_records 表的 IcebergR2Sink 实体实例
      */
     public static IcebergR2Sink fromConfig() {
+        return fromConfig("raw_sms_records", "msg_uid,received_at");
+    }
+
+    /**
+     * 通用工厂方法：装配指定表与主键列的 IcebergR2Sink 实例
+     *
+     * @param targetTable           目标表名 (如 "raw_sms_records" 或 "dwd_financial_transactions")
+     * @param defaultEqualityColumn 默认 Upsert 相等列 (如 "msg_uid,received_at" 或 "id,tx_time")
+     */
+    public static IcebergR2Sink fromConfig(String targetTable, String defaultEqualityColumn) {
         boolean upsert = ConfigUtils.getBoolean("ICEBERG_UPSERT_ENABLED", true);
-        String equalityColStr = ConfigUtils.get("ICEBERG_UPSERT_EQUALITY_COLUMNS", "msg_uid,received_at");
+        
+        // 如果配置了针对特定表的相等列环境变量 (如 ICEBERG_UPSERT_EQUALITY_COLUMNS_DWD_FINANCIAL_TRANSACTIONS)，优先读取；
+        // 否则如果在写非默认 raw_sms_records 表时，使用传入的 defaultEqualityColumn，避免被全局 ICEBERG_UPSERT_EQUALITY_COLUMNS 污染
+        String tableSpecificKey = "ICEBERG_UPSERT_EQUALITY_COLUMNS_" + targetTable.toUpperCase();
+        String equalityColStr;
+        if (ConfigUtils.get(tableSpecificKey, null) != null) {
+            equalityColStr = ConfigUtils.get(tableSpecificKey, defaultEqualityColumn);
+        } else if ("raw_sms_records".equalsIgnoreCase(targetTable)) {
+            equalityColStr = ConfigUtils.get("ICEBERG_UPSERT_EQUALITY_COLUMNS", defaultEqualityColumn);
+        } else {
+            equalityColStr = defaultEqualityColumn;
+        }
+
         List<String> equalityColumns = Arrays.stream(equalityColStr.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
@@ -106,7 +128,7 @@ public class IcebergR2Sink implements Serializable {
 
         return new IcebergR2Sink(
                 ConfigUtils.get("ICEBERG_CATALOG_SCHEMA", "finance_dev"),
-                "raw_sms_records",
+                targetTable,
                 1, // 🎯 核心约束：漏斗形单并发 (消灭小文件碎片，零碎化单包落盘)
                 upsert,
                 equalityColumns

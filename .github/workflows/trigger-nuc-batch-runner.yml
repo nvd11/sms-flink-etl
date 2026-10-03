@@ -11,6 +11,15 @@ on:
         options:
           - finance
           - finance_dev
+      pipeline_stage:
+        description: 'Pipeline Stage to Execute (ods, dwd, or all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - ods
+          - dwd
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
@@ -23,7 +32,7 @@ jobs:
   dispatch-batch-job:
     name: Dispatch Ephemeral Batch Job to NUC
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - name: Setup SSH Key & Execute Batch Job on K3s
@@ -32,6 +41,7 @@ jobs:
           SSH_USER: ${{ secrets.K3S_SSH_USER }}
           SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
           TARGET_ENV: ${{ inputs.target_env || 'finance' }}
+          PIPELINE_STAGE: ${{ inputs.pipeline_stage || 'all' }}
           OVERRIDE_IMAGE: ${{ inputs.image }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -59,34 +69,59 @@ jobs:
             ssh "${SSH_USER}@${SSH_HOST}" "$@"
           }
 
-          JOB_NAME="nuc-run-${RUN_ID}"
-          echo "🚀 Preparing dispatch for Job: ${JOB_NAME} (Target Schema: ${TARGET_ENV})"
+          execute_stage() {
+            local stage_name="$1"
+            local job_name="nuc-${stage_name}-${RUN_ID}"
+            echo "================================================================================"
+            echo "🚀 [Stage: ${stage_name^^}] Preparing dispatch for Job: ${job_name} (Target Schema: ${TARGET_ENV})"
+            echo "================================================================================"
 
-          # 2. 动态组装并执行拉起命令 (精准覆盖 ICEBERG_CATALOG_SCHEMA 与镜像)
-          run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${JOB_NAME} -n batch-jobs --dry-run=client -o json" \
-            | jq --arg schema "${TARGET_ENV}" --arg img "${OVERRIDE_IMAGE}" '
-                .spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) | map(select(.name != "ICEBERG_CATALOG_SCHEMA")) + [{"name": "ICEBERG_CATALOG_SCHEMA", "value": $schema}]) |
-                if ($img != "") then .spec.template.spec.containers[0].image = $img else . end
-              ' \
-            | run_ssh "sudo kubectl apply -f -"
-          echo "✅ Job dispatched to K3s successfully!"
+            # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME 与镜像)
+            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${job_name} -n batch-jobs --dry-run=client -o json" \
+              | jq --arg schema "${TARGET_ENV}" --arg stage "${stage_name}" --arg img "${OVERRIDE_IMAGE}" '
+                  .spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) 
+                    | map(select(.name != "ICEBERG_CATALOG_SCHEMA" and .name != "FLINK_JOB_NAME")) 
+                    + [
+                        {"name": "ICEBERG_CATALOG_SCHEMA", "value": $schema},
+                        {"name": "FLINK_JOB_NAME", "value": $stage}
+                      ]) |
+                  if ($img != "") then .spec.template.spec.containers[0].image = $img else . end
+                ' \
+              | run_ssh "sudo kubectl apply -f -"
+            echo "✅ Job ${job_name} dispatched to K3s successfully!"
 
-          # 4. 轮询等待 Job 执行完成并打印日志 (最多 180 秒)
-          echo "⏳ Waiting for batch execution to complete on NUC..."
-          if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=180s job/${JOB_NAME} -n batch-jobs"; then
-            echo "❌ Job did not complete in time. Inspecting pod status and logs:"
-            run_ssh "sudo kubectl describe pods -n batch-jobs -l job-name=${JOB_NAME} || true"
-            run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100 || true"
-            exit 1
+            # 轮询等待 Job 执行完成并打印日志 (最多 180 秒)
+            echo "⏳ Waiting for ${stage_name^^} execution to complete on NUC..."
+            if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=180s job/${job_name} -n batch-jobs"; then
+              echo "❌ Job ${job_name} did not complete in time. Inspecting pod status and logs:"
+              run_ssh "sudo kubectl describe pods -n batch-jobs -l job-name=${job_name} || true"
+              run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=100 || true"
+              exit 1
+            fi
+
+            # 获取 Pod 输出日志并记录到 Summary
+            local logs
+            logs=$(run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=100")
+            
+            echo "### 📊 [Stage: ${stage_name^^}] Batch Execution Logs on NUC Nova" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            echo "$logs" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+            echo "✅ [Stage: ${stage_name^^}] Completed successfully!"
+          }
+
+          if [ "${PIPELINE_STAGE}" = "all" ] || [ "${PIPELINE_STAGE}" = "ods" ]; then
+            execute_stage "ods"
           fi
 
-          # 5. 获取 Pod 输出日志并记录到 Summary
-          LOGS=$(run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${JOB_NAME} --tail=100")
-          
-          echo "### 📊 Batch Execution Logs on NUC Nova" >> "$GITHUB_STEP_SUMMARY"
-          echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          echo "$LOGS" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "${PIPELINE_STAGE}" = "all" ] || [ "${PIPELINE_STAGE}" = "dwd" ]; then
+            execute_stage "dwd"
+          fi
+
+          echo "================================================================================"
+          echo "🎉 All requested batch stages executed successfully on NUC!"
+          echo "================================================================================"
 
           echo "$LOGS"
 

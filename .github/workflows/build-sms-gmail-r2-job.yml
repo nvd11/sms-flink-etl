@@ -30,7 +30,7 @@ jobs:
           cache: 'maven'
 
       - name: Build Fat JAR with Maven
-        run: mvn clean package -DskipTests -Dmain.class=com.finance.etl.jobs.SmsGmailR2Job
+        run: mvn clean package -DskipTests -Dmain.class=com.finance.etl.jobs.JobLauncher
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

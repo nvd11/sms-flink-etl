@@ -25,6 +25,20 @@ class IcebergR2SinkTest {
     }
 
     @Test
+    @DisplayName("测试指定表与主键配置装配 DWD IcebergR2Sink：验证 targetTable 与 equalityColumns")
+    void testFromConfigForDwd() {
+        IcebergR2Sink sink = IcebergR2Sink.fromConfig("dwd_financial_transactions", "id,tx_time");
+
+        assertNotNull(sink);
+        assertEquals(1, sink.getWriteParallelism(), "写端并发度必须严格锁定为 1");
+        assertEquals("dwd_financial_transactions", sink.getTableName(), "目标表必须为 dwd_financial_transactions");
+        assertEquals("finance_dev", sink.getSchemaName());
+        assertTrue(sink.isUpsert(), "DWD 层应开启 Upsert");
+        assertTrue(sink.getEqualityColumns().contains("id"), "DWD equality column 必须包含 id");
+        assertTrue(sink.getEqualityColumns().contains("tx_time"), "DWD equality column 必须包含分区源字段 tx_time");
+    }
+
+    @Test
     @DisplayName("测试构造器非空防御机制")
     void testConstructorValidation() {
         assertThrows(NullPointerException.class, () -> new IcebergR2Sink(
