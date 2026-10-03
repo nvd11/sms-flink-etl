@@ -22,19 +22,19 @@
 
 ## 2. 分阶段实施路线与任务拆解 (Milestones & Tasks)
 
-### 📌 Milestone 1: DWS 聚合服务层建模与 Trino 验证 (预计耗时: 1 天)
-* **核心目标**：在数据湖中建立纯 SQL View 聚合模型，无需额外批处理计算资源，随查随得。
+### 📌 Milestone 1: DWS 聚合服务层建模与 Trino 验证 (已完成 ✅)
+* **核心目标**：在数据湖中建立纯 SQL View 聚合模型，引入 `min_id` 与 `max_id` 物理行号聚合边界，无需额外批处理计算资源，随查随得。
 * **具体任务项**：
-  1. **编写 DDL 脚本 (`scripts/schema-dws.sql`)**：
-     * `dws_financial_summary_daily`（日度流水、净开销、五大类目切片、单笔峰值）；
-     * `dws_financial_summary_weekly`（自然周总览、日均消费、周中 vs 周末开销对比、Top 类目）；
-     * `dws_financial_summary_monthly`（月度资产负债大盘、净支出、信用卡对账、外币统计）；
-     * `dws_merchant_spending_ranking`（商户排行 Mart，含频次、客单价与渗透率）；
+  1. **编写 DDL 脚本 (`scripts/schema-dws.sql` / `schema-dws-dev.sql`)**：
+     * `dws_financial_summary_daily`（日度流水、净开销、五大类目切片、单笔峰值、包含 `min_id`/`max_id`）；
+     * `dws_financial_summary_weekly`（自然周总览、日均消费、周中 vs 周末开销对比、Top 类目、包含 `min_id`/`max_id`）；
+     * `dws_financial_summary_monthly`（月度资产负债大盘、净支出、信用卡对账、外币统计、包含 `min_id`/`max_id`）；
+     * `dws_merchant_spending_ranking`（商户排行 Mart，含频次、客单价与渗透率、包含 `min_id`/`max_id`）；
   2. **双环境同步与对账**：
      * 将 DWS 脚本加入 `.github/workflows/sync-iceberg-schema.yml` 自动同步触发路径；
      * 直连 Trino 执行验证：对比 9 月与 10 月真实数据，确保 `net_expense = total_expense - total_refund` 严格平账；
   3. **验收标准**：
-     * 执行 `SELECT * FROM iceberg.finance.dws_financial_summary_monthly` 在 0.5 秒内极速返回。
+     * 执行 `SELECT * FROM iceberg.finance.dws_financial_summary_monthly` 在 0.5 秒内极速返回。已 100% 验收通过！✅
 
 ---
 

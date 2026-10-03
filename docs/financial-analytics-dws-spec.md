@@ -53,6 +53,8 @@
 | 字段名 | 物理类型 | 说明与示例 |
 | :--- | :--- | :--- |
 | `stat_date` | `DATE` | 统计日期，主维度键 (如 `2026-10-03`) |
+| `min_id` | `BIGINT` | 🎯 该日聚合包含的最小 DWD 行号 (如 `439`) |
+| `max_id` | `BIGINT` | 🎯 该日聚合包含的最大 DWD 行号 (如 `455`，直接作为水位游标) |
 | `day_of_week` | `INTEGER` | 星期几 (1 = 周一, 7 = 周日) |
 | `is_weekend` | `BOOLEAN` | 是否为周末 (区分工作日通勤 vs 周末休闲消费) |
 | `tx_count` | `BIGINT` | 当日有效消费笔数 |
@@ -84,6 +86,8 @@
 | `week_period` | `VARCHAR` | 自然周时间跨度标识 (如 `'2026-W40 (09-28 ~ 10-04)'`) |
 | `week_start_date`| `DATE` | 该周周一对应日期 (如 `2026-09-28`) |
 | `week_end_date` | `DATE` | 该周周日对应日期 (如 `2026-10-04`) |
+| `min_id` | `BIGINT` | 🎯 该周聚合包含的最小 DWD 行号 |
+| `max_id` | `BIGINT` | 🎯 该周聚合包含的最大 DWD 行号 (直接作为周水位游标) |
 | `tx_count` | `BIGINT` | 本周总有效动账笔数 |
 | `total_expense` | `DECIMAL(12,2)` | 本周总消费支出 (CNY) |
 | `total_refund` | `DECIMAL(12,2)` | 本周冲正退款总额 (CNY) |
@@ -106,6 +110,8 @@
 | 字段名 | 物理类型 | 说明与示例 |
 | :--- | :--- | :--- |
 | `stat_month` | `VARCHAR` | 统计月份主键 (如 `'2026-09'`) |
+| `min_id` | `BIGINT` | 🎯 该月聚合包含的最小 DWD 行号 |
+| `max_id` | `BIGINT` | 🎯 该月聚合包含的最大 DWD 行号 (直接作为月水位游标) |
 | `tx_count` | `BIGINT` | 全月总消费交易笔数 |
 | `total_expense_cny`| `DECIMAL(12,2)`| 全月人民币总支出 (如 `36213.26`) |
 | `total_refund_cny` | `DECIMAL(12,2)`| 全月退款冲抵金额 (如 `241.80`) |
