@@ -5,21 +5,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
- * DWD 有效动账判定与交易类型分类器 (ValidTxExtractor)
- * 职责：
- * 1. 甄别报文是否为“真实资金变动的有效交易” (is_valid_tx: true/false)；
- * 2. 判定资金流动方向 (direction: OUTFLOW 支出 / INFLOW 收入)；
- * 3. 确定细分动账类型 (tx_type: EXPENSE 消费, REFUND 退款, INCOME 理赔到账, TRANSFER 转账/还款)。
+ * DWD 有效动账判定提取器 (ValidTxExtractor)
+ * 职责：专职负责甄别报文是否为“真实资金变动的有效交易” (is_valid_tx: true/false)。
  *
- * 过滤原则：
- * - 排除纯验证码 (如“验证码为527521”)；
- * - 排除营销宣传与套路贷广告 (如“分子借钱”、“智花”、“中银E贷”、“额度最高30万”)；
- * - 排除账单提醒/催缴通知 (如“当月账单为5.99元，最低还款额0.30元”，非实际交易)；
- * - 排除纯公众号无金额流水推送 (如“交易成功提醒服务号UID：10336”)。
+ * 恪守单一职责原则 (SRP)：
+ * - 仅输出 key: "is_valid_tx" (Boolean)；
+ * - 绝不越权输出资金流向 (direction) 或交易细分类型 (tx_type)。
+ *
+ * 判定原则：
+ * - 负向一票否决：过滤纯验证码、营销广告、套路贷、账单还款提醒、服务号无金额推送、防空政务通知；
+ * - 正向特征核验：包含真实动账行为特征词 (消费、付款、退款、理赔、到账等)。
  */
 public class ValidTxExtractor implements DwdFieldExtractor {
     private static final long serialVersionUID = 1L;
@@ -33,58 +31,27 @@ public class ValidTxExtractor implements DwdFieldExtractor {
 
         String text = record.getRawBody();
 
-        // 1. 负向一票否决：检查是否为纯广告、纯通知或纯验证码
+        // 1. 负向一票否决：检查是否为纯广告、纯通知、纯催缴或纯验证码
         if (isFilteredNotice(text)) {
-            Map<String, Object> result = new HashMap<>();
-            result.put("is_valid_tx", false);
-            return result;
+            return Map.of("is_valid_tx", false);
         }
 
-        boolean isValid = false;
-        String direction = null;
-        String txType = null;
+        // 2. 正向动账行为特征匹配
+        boolean isValid = isPositiveTransaction(text);
 
-        // 2. 退款与冲正判定 (优先于消费，防止“退款消费”被混淆)
-        if (text.contains("退款") || text.contains("冲正")) {
-            isValid = true;
-            direction = "INFLOW";
-            txType = "REFUND";
-        }
-        // 3. 还款判定 (信用卡还款属于资金流出/转移，且常含“到账后”，必须优先于通用“到账”)
-        else if (text.contains("还款") && !text.contains("最低还款") && !text.contains("账单为") && !text.contains("账单应还")) {
-            isValid = true;
-            direction = "OUTFLOW";
-            txType = "TRANSFER";
-        }
-        // 4. 理赔/赔款/入账收入判定
-        else if (text.contains("赔款") || text.contains("理赔") || text.contains("到账") || text.contains("入账")) {
-            isValid = true;
-            direction = "INFLOW";
-            txType = "INCOME";
-        }
-        // 5. 消费与支付判定 (高频核心场景)
-        else if (text.contains("消费") || text.contains("付款") || text.contains("支付") || text.contains("已付") || text.contains("扣款")) {
-            isValid = true;
-            direction = "OUTFLOW";
-            txType = "EXPENSE";
-        }
-        // 6. 转账买入判定
-        else if (text.contains("转账") || text.contains("买入")) {
-            isValid = true;
-            direction = "OUTFLOW";
-            txType = "TRANSFER";
-        }
+        LOG.debug("🛡️ [ValidTxExtractor] ID: {} => isValidTx: {}", record.getId(), isValid);
+        return Map.of("is_valid_tx", isValid);
+    }
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("is_valid_tx", isValid);
-        if (isValid) {
-            result.put("direction", direction);
-            result.put("tx_type", txType);
-        }
-
-        LOG.debug("🛡️ [ValidTxExtractor] ID: {} => isValid: {}, direction: {}, txType: {}",
-                record.getId(), isValid, direction, txType);
-        return result;
+    /**
+     * 正向动账行为特征识别
+     */
+    private boolean isPositiveTransaction(String text) {
+        return text.contains("消费") || text.contains("付款") || text.contains("支付")
+                || text.contains("已付") || text.contains("扣款") || text.contains("退款")
+                || text.contains("冲正") || text.contains("赔款") || text.contains("理赔")
+                || text.contains("到账") || text.contains("入账") || text.contains("还款")
+                || text.contains("转账") || text.contains("买入");
     }
 
     /**

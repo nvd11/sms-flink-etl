@@ -29,22 +29,22 @@ class ValidTxExtractorTest {
         return new SmsRecord(1L, "uid", "EMAIL_IMAP", "CGB", "SIM_1", Instant.now(), rawBody, Instant.now());
     }
 
-    @ParameterizedTest(name = "[{index}] 交易有效性判定: {0} => valid: {1}, dir: {2}, type: {3}")
+    @ParameterizedTest(name = "[{index}] 交易有效性判定: {0} => valid: {1}")
     @CsvSource({
-            "'106980095508【广发银行】您尾号3342信用卡03日10:58消费14.89人民币，交易商户:支付宝-高德打车。', true, OUTFLOW, EXPENSE",
-            "'106980095508【广发银行】您尾号3342信用卡09月27日发起退款人民币43.92元，到账情况点查询', true, INFLOW, REFUND",
-            "'10690661440018【中意人寿】尊敬的潘瑞成：您的理赔申请已通过审核，赔款金额110.79元将于0-5个工作日到账', true, INFLOW, INCOME",
-            "'106980095508【广发银行】您尾号3342信用卡16日00:43还款人民币17253.33元，到账后0', true, OUTFLOW, TRANSFER",
-            "'10692576032【平安产险】尊敬的潘文林，您已付6646.00元的保单已承保', true, OUTFLOW, EXPENSE",
-            "'【微信支付】微信零钱已向某某便利店成功付款8.00元。SubId：1', true, OUTFLOW, EXPENSE",
-            "'【支付宝】花呗自动扣款通知：扣款成功299.00元。SubId：2', true, OUTFLOW, EXPENSE"
+            "'106980095508【广发银行】您尾号3342信用卡03日10:58消费14.89人民币，交易商户:支付宝-高德打车。', true",
+            "'106980095508【广发银行】您尾号3342信用卡09月27日发起退款人民币43.92元，到账情况点查询', true",
+            "'10690661440018【中意人寿】尊敬的潘瑞成：您的理赔申请已通过审核，赔款金额110.79元将于0-5个工作日到账', true",
+            "'106980095508【广发银行】您尾号3342信用卡16日00:43还款人民币17253.33元，到账后0', true",
+            "'10692576032【平安产险】尊敬的潘文林，您已付6646.00元的保单已承保', true",
+            "'【微信支付】微信零钱已向某某便利店成功付款8.00元。SubId：1', true",
+            "'【支付宝】花呗自动扣款通知：扣款成功299.00元。SubId：2', true"
     })
-    void testValidTransactions(String rawBody, boolean expectedValid, String expectedDirection, String expectedType) {
+    void testValidTransactions(String rawBody, boolean expectedValid) {
         Map<String, Object> result = extractor.extract(createRecord(rawBody));
 
-        assertEquals(expectedValid, result.get("is_valid_tx"));
-        assertEquals(expectedDirection, result.get("direction"));
-        assertEquals(expectedType, result.get("tx_type"));
+        assertEquals(expectedValid, result.get("is_valid_tx"), "is_valid_tx 判定必须匹配");
+        assertFalse(result.containsKey("direction"), "ValidTxExtractor 恪守单一职责，严禁越权返回 direction");
+        assertFalse(result.containsKey("tx_type"), "ValidTxExtractor 恪守单一职责，严禁越权返回 tx_type");
     }
 
     @Test
@@ -104,18 +104,12 @@ class ValidTxExtractorTest {
 
                 if (Boolean.TRUE.equals(isValid)) {
                     validCount++;
-                    String direction = (String) result.get("direction");
-                    String txType = (String) result.get("tx_type");
+                    assertFalse(result.containsKey("direction"), "ValidTxExtractor 严禁输出 direction");
+                    assertFalse(result.containsKey("tx_type"), "ValidTxExtractor 严禁输出 tx_type");
 
-                    assertNotNull(direction, "有效交易必须包含资金流向 (direction)");
-                    assertNotNull(txType, "有效交易必须包含交易细分类型 (tx_type)");
-
-                    directionCounts.put(direction, directionCounts.getOrDefault(direction, 0) + 1);
-                    txTypeCounts.put(txType, txTypeCounts.getOrDefault(txType, 0) + 1);
-
-                    auditLogs.add(String.format("[VALID #%3d | ID:%3d | %-4s] => %-7s | %-8s | %s",
-                            validCount, id, sender != null ? sender : "N/A", direction, txType,
-                            rawBody != null && rawBody.length() > 60 ? rawBody.substring(0, 60).replace("\n", " ") + "..." : rawBody));
+                    auditLogs.add(String.format("[VALID #%3d | ID:%3d | %-4s] => isValidTx: true  | %s",
+                            validCount, id, sender != null ? sender : "N/A",
+                            rawBody != null && rawBody.length() > 65 ? rawBody.substring(0, 65).replace("\n", " ") + "..." : rawBody));
                 } else {
                     invalidCount++;
                 }
@@ -133,8 +127,6 @@ class ValidTxExtractorTest {
         System.out.printf("  • 判定为真实动账 (Valid Tx)    : %d 笔 (占总短信比例: %.1f%%)\n",
                 validCount, totalCount > 0 ? (double) validCount * 100 / totalCount : 0);
         System.out.printf("  • 判定为免动账/通知 (Invalid)   : %d 封 (验证码/广告/服务号/还款提醒)\n", invalidCount);
-        System.out.println("  • 资金方向分布 (Direction)      : " + directionCounts);
-        System.out.println("  • 交易类型分布 (Transaction Type): " + txTypeCounts);
         System.out.println("================================================================================");
 
         assertTrue(totalCount > 0, "Dev 表中必须有数据可供审计");
