@@ -59,7 +59,7 @@
 ---
 
 ### 📌 Milestone 3: ADS 湖仓落盘、Flink 双写与 Yui Slack 集成 (预计耗时: 1 天)
-* **核心目标**：构建 ADS 持久化物理表 `ads_financial_reports`，在 Flink 算子链中实现**“分析结果落盘湖仓 ➕ Yui Slack 私信投递”双写闭环**，并以单一通用 Job 靠参数多态驱动日/周/月。
+* **核心目标**：构建 ADS 持久化物理表 `ads_financial_reports`，在 Flink 算子链中实现**“分析结果落盘湖仓 ➕ Yui Slack 私信投递”双写闭环**，并以单一通用 Job 结合**方案 A（纯行号增量区间推进）**驱动日/周/月。
 * **具体任务项**：
   1. **编写 ADS 事实表 DDL (`scripts/schema-ads.sql`)**：
      * 在 `iceberg.finance` 和 `iceberg.finance_dev` 创建 `ads_financial_reports`；
@@ -71,9 +71,10 @@
   3. **通用 Flink 批处理主作业 (`FinancialReporterJob.java`)**：
      * 遵循 DRY 架构，以单一通用 Job 承载日/周/月三套分析需求；
      * 支持命令行参数 `--period=daily/weekly/monthly`（或环境变量 `REPORT_PERIOD`）；
-     * 多态选择 Trino DWS 视图，并以独立复合游标（`report-daily`, `report-weekly`, `report-monthly`）在 `etl_sync_offsets` 推进水位；
-     * 具备**启动前幂等防御检查**：已跑过当前周期则秒级跳过，杜绝重复落盘与消息骚扰；
+     * **方案 A 增量游标核算**：从 `etl_sync_offsets` 提取对应周期的 `last_offset`，精准只处理 `WHERE id > last_offset AND id <= currentMaxId` 的增量事实行；
+     * **天然防重与静默机制 (Quiet Mode)**：若 `currentMaxId <= last_offset`（无新增动账），秒级安全退出，零 Token 消耗且不打扰主人；
      * Flink 双写算子编排：`Trino DWS Source ➔ FinancialAdvisorProcessFunction ➔ [IcebergR2Sink (ADS表) + SlackYuiSink (私聊)]`；
+     * 成功后向前推进该周期的 `last_offset = currentMaxId`；
   4. **QuickChart 短链与 Slack Block Kit 发送器**：
      * 封装标准 `POST https://quickchart.io/chart/create` API，彻底规避裂图隐患；
      * 组装 Slack Block Kit 发送器并私聊直达主人 `U0AM8G9AARF`；

@@ -264,16 +264,18 @@ graph TB
 ### 6.1 核心技术栈选型与规范 (Tech Stack & Conventions)
 * **Flink 批处理单一通用作业 (`FinancialReporterJob`)**:
   * 遵循 DRY（Don't Repeat Yourself）原则，日/周/月三套分析链路**高度收敛于同一个通用 Flink 批处理作业**；
-  * 通过参数 `--period=daily/weekly/monthly`（或环境变量 `REPORT_PERIOD`）动态多态驱动：
-    * 动态选择对应的 Trino DWS 视图（`dws_financial_summary_daily` / `weekly` / `monthly`）；
-    * 动态计算周期主键与时间窗口；
-    * 动态隔离维护独立的断点续传水位游标；
-  * 完全纳入 `JobLauncher` 统一路由体系（`FLINK_JOB_NAME=report`）；
-* **三维独立水位表防重机制 (`etl_sync_offsets`)**:
-  * 周期作业在启动时执行**幂等防御检查 (Idempotency Guard)**，若当前周期已成功落盘，则安全跳过，绝不重复生成或骚扰主人：
-    * `report-daily`: 游标键 `last_offset` 采用自然日编码（如 `20261003L`）；
-    * `report-weekly`: 游标键 `last_offset` 采用 ISO 周编码（如 `202640L`）；
-    * `report-monthly`: 游标键 `last_offset` 采用月份编码（如 `202609L`）；
+  * 通过参数 `--period=daily/weekly/monthly`（或环境变量 `REPORT_PERIOD`）动态多态驱动；
+  * 统一由 `JobLauncher` 调度分发（`FLINK_JOB_NAME=report`）；
+* **方案 A：全周期统一数字自增 ID 水位推进规范 (Unified Row-ID Watermark Strategy)**:
+  * 彻底打破传统易产生漏单的日历切分，**Daily、Weekly、Monthly 三大周期 100% 统一采用“上游 DWD 物理自增行号游标 (Row-ID Cursor)”**；
+  * 核心计算区间：严格锁定在 `WHERE id > :lastOffset AND id <= :currentMaxId`；
+    * `report-daily`: 独立维护日汇报水位，记录 `last_offset`（如自昨天 23:00 后新产生的行号 101~110）；
+    * `report-weekly`: 独立维护周复盘水位，记录 `last_offset`（如自上周日 23:00 后新产生的行号 50~110）；
+    * `report-monthly`: 独立维护月度大盘水位，记录 `last_offset`（如自上月末 23:30 后新产生的行号 0~110）；
+  * **天然防重与静默机制 (Quiet Mode)**：
+    * 当探测到 `currentMaxId <= lastOffset`（即自上次结算以来无新增动账）时，算子直接判定为无新数据，**秒级退出，零 Token 消耗，绝不骚扰主人**；
+  * **容灾抗延迟能力**：
+    * 即使跨国网络或运营商延迟导致 9 月 30 日的账单在 10 月 1 日才入湖，只要其分配了递增 `id`，也会被当前周期的增量区间精准捕获，**彻底消除跨月/跨周漏账**；
 * **大模型 Agent 框架**: **`LangChain4j` (版本: `0.35.0`+)**
   * 模块依赖：`dev.langchain4j:langchain4j-open-ai`（轻量独立，零 Spring 捆绑）；
   * 编程模式：**声明式 `AiServices`**，定义 `FinancialAdvisorService` 接口，配合 `@SystemMessage` 与 `@UserMessage` 动态代理生成；
