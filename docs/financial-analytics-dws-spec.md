@@ -223,22 +223,39 @@ Yui 通过 Slack 原生 Web API（`chat.postMessage`）与主人（`U0AM8G9AARF`
 ```mermaid
 graph TB
     DWD["iceberg.finance.dwd_financial_transactions<br/>(事实明细表)"] -->|SQL 窗口与分组聚合| DWS["Trino DWS 汇总模型<br/>(Daily / Weekly / Monthly 视图)"]
-    DWS -->|Trino REST API / JDBC| AGENT["财务分析 Agent / 服务调度器<br/>(Python / Node.js 轻量执行器)"]
-    AGENT -->|结构化财务指标 + 异常明细 Prompt| LLM["LiteLLM 网关 / 大语言模型<br/>(Gemini / Claude / Qwen)"]
-    LLM -->|智能洞察 / 贴心点评 / 预警建议| YUI["Slack Bot Yui (chat.postMessage)<br/>(私信直达主人 U0AM8G9AARF)"]
+    DWS -->|Trino REST API / JDBC| AGENT["Java 财务分析 Agent<br/>(LangChain4j AiServices 驱动)"]
+    AGENT -->|OpenAI 兼容协议 / Gemini 3.8 Flash| LITELLM["LiteLLM 统一网关<br/>(https://gw.jppwl.asia/litellm/v1)"]
+    LITELLM -->|智能洞察 / 贴心点评 / 预警建议| AGENT
+    AGENT -->|QuickChart 短链 API + Slack Block Kit| YUI["Slack Bot Yui (chat.postMessage)<br/>(私信直达主人 U0AM8G9AARF)"]
 ```
+
+### 6.1 核心技术栈选型与规范 (Tech Stack & Conventions)
+* **大模型 Agent 框架**: **`LangChain4j` (版本: `0.35.0`+)**
+  * 模块依赖：`dev.langchain4j:langchain4j-open-ai`（轻量独立，零 Spring 捆绑）；
+  * 编程模式：**声明式 `AiServices`**，定义 `FinancialAdvisorService` 接口，配合 `@SystemMessage` 与 `@UserMessage` 动态代理生成；
+* **LLM 网关与调度链路 (姿势 A · 统一网关)**:
+  * 端点地址：`https://gw.jppwl.asia/litellm/v1`（或内网 `http://10.0.1.227:9090/v1`）；
+  * 后端驱动主力模型：**`gemini-3.8-flash`**（高推理智商、低延迟、超大上下文）；
+  * 授权凭证：Yui 专属虚拟 Key (`sk-WhW6BWdwKN_LITjCuAmgiA`)；
+  * 核心优势：享受 LiteLLM 统一路由、多 Key 轮询容灾以及故障自动降级；
+* **图表可视化引擎**:
+  * **QuickChart 官方标准短链 API** (`POST https://quickchart.io/chart/create`)；
+  * 自动将环形饼图 (`doughnut`) 与横向柱状图 (`horizontalBar`) 转换为标准静态短链图片；
+* **消息展现载体**:
+  * **Slack Block Kit**（以 Yui 身份私聊直达主人 `U0AM8G9AARF`）。
 
 ---
 
 ## 7. 后续实施路径规划 (Roadmap)
 
-1. **第一阶段 (Step 1 · 视图层就绪)**：
-   * 编写 `scripts/schema-dws.sql`，在 Trino 中创建 `dws_financial_summary_daily`、`dws_financial_summary_weekly`、`dws_financial_summary_monthly` 视图；
-   * 通过 Trino 对生产 9 月、10 月真实数据实施全量指标交叉对账。
-2. **第二阶段 (Step 2 · Yui Slack 消息生成与推送引擎)**：
-   * 编写轻量推送执行器（如 `scripts/yui-financial-reporter.js` 或 Python 模块）；
-   * 打通：Trino 查 DWS 指标 ➔ 调用 LLM 生成点评 ➔ Yui 格式化成 Slack Blocks 发给主人；
-   * 在本地先跑一次 9 月全月的 Yui 播报测试。
-3. **第三阶段 (Step 3 · 云原生自动化调度)**：
-   * 将推送脚本挂载为 K3s 定时任务（或在 GitHub Actions 每日晚间触发）；
+1. **第一阶段 (Step 1 · 视图层就绪 - 已完成 ✅)**：
+   * 编写 `scripts/schema-dws.sql` 与 `schema-dws-dev.sql`，在 Trino 中创建 4 大 DWS 视图；
+   * 生产与测试环境通过 Trino 全量指标交叉对账，平账验证 100% 成功。
+2. **第二阶段 (Step 2 · LangChain4j Agent 与 Yui Slack 引擎构建)**：
+   * 引入 `langchain4j-open-ai` 依赖；
+   * 实现声明式 `FinancialAdvisorService`，对接私有 LiteLLM 网关调度 `gemini-3.8-flash`；
+   * 实现 `QuickChartClient` 生成图表短链，组装 Slack Block Kit 发送器；
+   * 编写 JUnit 测试，本地运行生成 9 月度全景图文分析报告。
+3. **第三阶段 (Step 3 · 云原生定时自动化调度)**：
+   * 结合 `JobLauncher`，将分析播报任务挂载为 K3s 定时任务（或在 GitHub Actions 每日晚间触发）；
    * 每天 22:30 自动生成日简报，每周日晚自动推送周点评。

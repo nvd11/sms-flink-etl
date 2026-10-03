@@ -38,36 +38,39 @@
 
 ---
 
-### 📌 Milestone 2: 财务分析 Agent 与 LLM 提示词工程 (预计耗时: 1 天)
-* **核心目标**：打通数据提取 ➔ LLM 点评链路，让大模型输出专业、贴心、有理有据的财务报告。
+### 📌 Milestone 2: 财务分析 Agent 与 LangChain4j 驱动 (预计耗时: 1 天)
+* **核心目标**：采用 **LangChain4j (0.35.0+)** 声明式 `AiServices` 驱动，直连私有 LiteLLM 网关（姿势 A），调度 `gemini-3.8-flash` 产出专业温暖的财务报告。
 * **具体任务项**：
-  1. **设计 System Prompt 架构**：
-     * 角色设定：贴心红颜情人 + 严谨的私人特许金融分析师（CFA 级别视角）；
-     * 分析维度：开销节律把脉、异常大额预警、高频小额漏水排查、省钱与权益建议；
-  2. **编写上下文组装引擎 (`scripts/financial_agent/reporter.py` 或 Node.js)**：
-     * 通过 Trino REST API 自动拉取指定周期（日/周/月）的 DWS 聚合指标；
-     * 提取具有显著特征的 Top 3 商户与大额动账；
-     * 组装结构化 JSON 上下文并提交给 LLM；
-  3. **对接 LLM 网关**：
-     * 优先打通本地 Starfive 网关的 LiteLLM 统一接口（`http://10.0.1.227:9090`）或 Gemini/Claude 接口；
-  4. **验收标准**：
-     * 本地运行脚本，能针对 2026 年 9 月真实数据输出一段高质量的《月度财务白皮书点评》。
+  1. **引入 Maven 依赖**：
+     * `dev.langchain4j:langchain4j-open-ai:0.35.0`（轻量独立，零外部容器侵入）；
+  2. **声明式 AI Service 接口定义 (`FinancialAdvisorService.java`)**：
+     * 采用 `@SystemMessage` 锁定 Yui 贴身秘书 + CFA 级财务分析人设；
+     * 采用 `@UserMessage` 动态注入周期标签与 DWS 聚合指标 JSON；
+     * 严格防范幻觉：严禁捏造金额，严格基于输入上下文；
+  3. **模型实例装配 (姿势 A · 统一网关)**：
+     * 使用 `OpenAiChatModel.builder()` 直连 `https://gw.jppwl.asia/litellm/v1`；
+     * 注入 Yui 专属凭证 `sk-WhW6BWdwKN_LITjCuAmgiA`，模型锁定为 `gemini-3.8-flash`；
+  4. **数据提炼与编排 (`FinancialAnalysisAgent.java`)**：
+     * 编排 `TrinoDwsClient` 拉取指标 ➔ 组装结构化上下文 ➔ 驱动 LangChain4j 产出专业洞察点评；
+  5. **验收标准**：
+     * 编写 JUnit 测试，成功跑通 9 月全量数据的 Gemini 智能总结与深度点评。
 
 ---
 
 ### 📌 Milestone 3: Yui Slack 富文本卡片与图表集成 (预计耗时: 1 天)
-* **核心目标**：将数据、图表与 LLM 文本包装为顶级排版的 Slack Block Kit 消息，私信直达主人。
+* **核心目标**：将 DWS 指标、QuickChart 高清图表与 LangChain4j 点评文本组装为 Slack Block Kit 消息，私信直达主人。
 * **具体任务项**：
-  1. **QuickChart 动态渲染器封装**：
-     * 封装标准短链 API（`POST https://quickchart.io/chart/create`），彻底避免 URL 编码超长截断；
-     * 支持生成：环形分类饼图（`doughnut`）与核心商户横向柱状图（`horizontalBar`）；
-  2. **Slack Block Kit 模板引擎**：
-     * **日简报模板**：大标题 + 左右两栏关键指标 + 走势文字条 + Yui 晚安点评；
-     * **周/月复盘模板**：大标题 + 财务大盘卡片 + 高清 QuickChart 图片块 + LLM 深度分析 + 分割线；
-  3. **安全凭证纳管**：
-     * 在 `.env`、GitHub Secrets 以及 K3s `sms-flink-secret` 中妥善注入 `SLACK_YUI_BOT_TOKEN`；
+  1. **QuickChart 短链渲染客户端 (`QuickChartClient.java`)**：
+     * 封装标准 `POST https://quickchart.io/chart/create` API，彻底规避 URL 编码截断与裂图隐患；
+     * 动态生成：环形消费分类饼图（`doughnut`）与核心商户横向柱状图（`horizontalBar`）；
+  2. **Slack Block Kit 发送器 (`YuiSlackSender.java`)**：
+     * 调用 Slack 原生 Web API `chat.postMessage`；
+     * 发送至主人专属私聊频道 `U0AM8G9AARF`；
+     * 支持日结小卡片、周度体检图文大卡片、月度全景白皮书大卡片；
+  3. **安全凭证注入与集成**：
+     * 环境变量 `SLACK_YUI_BOT_TOKEN` 安全纳管；
   4. **验收标准**：
-     * 运行测试脚本，主人的 Slack 能够收到一条包含完整文字排版 + 正常显示图表的完整财务卡片。
+     * 运行端到端测试，主人的 Slack 收到图文并茂、排版精美的真实 9 月度财务复盘大卡片。
 
 ---
 
