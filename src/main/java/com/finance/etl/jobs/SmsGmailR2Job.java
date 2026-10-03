@@ -64,14 +64,56 @@ public class SmsGmailR2Job {
                 .name("SmsRecord-To-RowData-Mapper");
         sink.append(rowStream);
 
-        // 4. 提交作业执行 (步骤 1：业务数据写入落盘，阻塞等待全部 TaskSlot 跑完)
+        // 4. 提交作业执行 (步骤 1：业务数据写入落盘，阻塞等待全部 TaskSlot 跑完，并捕获执行足迹)
         LOG.info("🚀 Submitting sms-gmail-r2 JobGraph to Flink execution runtime...");
-        JobExecutionResult executionResult = env.execute("SMS-Gmail-R2-Lakehouse-Batch-Job");
+        java.time.Instant startTime = java.time.Instant.now();
+        String executionId = "exec_ods_" + startTime.toEpochMilli();
+        JobExecutionResult executionResult = null;
+        String status = "RUNNING";
+        String errorMsg = null;
+        Long maxUid = null;
 
-        // 5. 提交水位位点 (步骤 2：作业 100% 成功后，从分布式累加器提取最大 UID 推进水位，严格保障 At-Least-Once)
-        Long maxUid = executionResult.getAccumulatorResult(SmsEmailParser.ACCUMULATOR_MAX_UID);
-        LOG.info("🌊 [Job Completion] Batch executed successfully. Global MAX(UID) from accumulator: {}", maxUid);
-        sink.commitOffset("sms-gmail-r2", "EMAIL_IMAP", source.getUser(), maxUid != null ? maxUid : 0L);
+        try {
+            executionResult = env.execute("SMS-Gmail-R2-Lakehouse-Batch-Job");
+            status = "SUCCESS";
+            maxUid = executionResult.getAccumulatorResult(SmsEmailParser.ACCUMULATOR_MAX_UID);
+        } catch (Exception e) {
+            status = "FAILED";
+            errorMsg = e.getMessage();
+            throw e;
+        } finally {
+            java.time.Instant endTime = java.time.Instant.now();
+            long runtimeMs = executionResult != null ? executionResult.getNetRuntime() :
+                    (endTime.toEpochMilli() - startTime.toEpochMilli());
+
+            // 5. 提交水位位点 (步骤 2：作业 100% 成功后，从分布式累加器提取最大 UID 推进水位，严格保障 At-Least-Once)
+            if ("SUCCESS".equals(status)) {
+                LOG.info("🌊 [Job Completion] Batch executed successfully. Global MAX(UID) from accumulator: {}", maxUid);
+                sink.commitOffset("sms-gmail-r2", "EMAIL_IMAP", source.getUser(), maxUid != null ? maxUid : 0L);
+            }
+
+            // 6. 持久化记录本次作业的执行足迹 (写入 etl_job_executions 表)
+            try (com.finance.etl.repository.JobExecutionAuditRepository auditRepo =
+                         com.finance.etl.repository.JobExecutionAuditRepository.fromConfig()) {
+                com.finance.etl.model.JobExecutionRecord auditRecord = new com.finance.etl.model.JobExecutionRecord(
+                        executionId,
+                        "sms-gmail-r2",
+                        status,
+                        startTime,
+                        endTime,
+                        runtimeMs,
+                        maxUid != null && maxUid > 0L ? 1L : 0L,
+                        maxUid != null && maxUid > 0L ? 1L : 0L,
+                        maxUid != null ? maxUid : 0L,
+                        String.format("{\"parallelism\":%d,\"user\":\"%s\"}", parallelism, source.getUser()),
+                        errorMsg,
+                        java.time.Instant.now()
+                );
+                auditRepo.recordExecution(auditRecord);
+            } catch (Exception ex) {
+                LOG.warn("⚠️ Failed to record job execution audit for sms-gmail-r2: {}", ex.getMessage());
+            }
+        }
 
         LOG.info("================================================================================");
         LOG.info("✅ SMS Gmail to R2 Batch Job Execution Finished Successfully!");

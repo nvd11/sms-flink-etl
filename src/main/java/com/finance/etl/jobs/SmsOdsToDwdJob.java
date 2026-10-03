@@ -88,20 +88,57 @@ public class SmsOdsToDwdJob {
 
         dwdSink.append(dwdRowStream);
 
-        // 6. 提交作业执行 (阻塞等待全部批处理分片执行完毕)
+        // 6. 提交作业执行并捕获 Spring Batch 风格的元数据审计足迹
         LOG.info("🚀 Submitting {} JobGraph to Flink execution runtime...", JOB_NAME);
-        JobExecutionResult executionResult = env.execute("SMS-ODS-To-DWD-Lakehouse-Batch-Job");
+        java.time.Instant startTime = java.time.Instant.now();
+        String executionId = "exec_dwd_" + startTime.toEpochMilli();
+        JobExecutionResult executionResult = null;
+        String status = "RUNNING";
+        String errorMsg = null;
+        Long maxRecordId = null;
 
-        // 7. 提交新水位：作业 100% 成功后，从分布式累加器提取本次最大 recordId 推进水位，严格保障 At-Least-Once
-        Long maxRecordId = executionResult.getAccumulatorResult(SmsRecordToDwdTransactionMapper.ACCUMULATOR_MAX_RECORD_ID);
-        LOG.info("🌊 [Job Completion] Batch executed successfully in {} ms. Global MAX(record_id) from accumulator: {}",
-                executionResult.getNetRuntime(), maxRecordId);
+        try {
+            executionResult = env.execute("SMS-ODS-To-DWD-Lakehouse-Batch-Job");
+            status = "SUCCESS";
+            maxRecordId = executionResult.getAccumulatorResult(SmsRecordToDwdTransactionMapper.ACCUMULATOR_MAX_RECORD_ID);
+        } catch (Exception e) {
+            status = "FAILED";
+            errorMsg = e.getMessage();
+            throw e;
+        } finally {
+            java.time.Instant endTime = java.time.Instant.now();
+            long runtimeMs = executionResult != null ? executionResult.getNetRuntime() :
+                    (endTime.toEpochMilli() - startTime.toEpochMilli());
 
-        if (maxRecordId != null && maxRecordId > lastOffset) {
-            dwdSink.commitOffset(JOB_NAME, CHANNEL_ICEBERG_ODS, SOURCE_TARGET_ODS, maxRecordId);
-            LOG.info("🌊 [Watermark Advanced] Updated {} watermark to {}", JOB_NAME, maxRecordId);
-        } else {
-            LOG.info("ℹ️ [Watermark Unchanged] No newer records processed in this batch (maxRecordId={}).", maxRecordId);
+            // 7. 提交新水位：作业 100% 成功后，推进水位
+            if ("SUCCESS".equals(status) && maxRecordId != null && maxRecordId > lastOffset) {
+                dwdSink.commitOffset(JOB_NAME, CHANNEL_ICEBERG_ODS, SOURCE_TARGET_ODS, maxRecordId);
+                LOG.info("🌊 [Watermark Advanced] Updated {} watermark to {}", JOB_NAME, maxRecordId);
+            } else if ("SUCCESS".equals(status)) {
+                LOG.info("ℹ️ [Watermark Unchanged] No newer records processed in this batch (maxRecordId={}).", maxRecordId);
+            }
+
+            // 8. 持久化记录本次作业的执行足迹 (写入 etl_job_executions 表)
+            try (com.finance.etl.repository.JobExecutionAuditRepository auditRepo =
+                         com.finance.etl.repository.JobExecutionAuditRepository.fromConfig()) {
+                com.finance.etl.model.JobExecutionRecord auditRecord = new com.finance.etl.model.JobExecutionRecord(
+                        executionId,
+                        JOB_NAME,
+                        status,
+                        startTime,
+                        endTime,
+                        runtimeMs,
+                        maxRecordId != null && maxRecordId > lastOffset ? (maxRecordId - lastOffset) : 0L,
+                        maxRecordId != null && maxRecordId > lastOffset ? (maxRecordId - lastOffset) : 0L,
+                        maxRecordId != null && maxRecordId > lastOffset ? maxRecordId : lastOffset,
+                        String.format("{\"parallelism\":%d,\"maxBatchSize\":%d}", parallelism, maxBatchSize),
+                        errorMsg,
+                        java.time.Instant.now()
+                );
+                auditRepo.recordExecution(auditRecord);
+            } catch (Exception ex) {
+                LOG.warn("⚠️ Failed to record job execution audit: {}", ex.getMessage());
+            }
         }
 
         LOG.info("================================================================================");
