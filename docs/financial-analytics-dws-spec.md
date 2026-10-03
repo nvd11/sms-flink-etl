@@ -262,9 +262,18 @@ graph TB
 ```
 
 ### 6.1 核心技术栈选型与规范 (Tech Stack & Conventions)
-* **Flink 批处理纯正血统**:
-  * 报告生成流程由专职批处理作业 **`FinancialReporterJob`** 统一驱动，完全纳入 `JobLauncher` 统一分发体系（`FLINK_JOB_NAME=report`）；
-  * 计算流程遵循 Flink 算子生命周期管控与单写漏斗控制（`writeParallelism=1`）；
+* **Flink 批处理单一通用作业 (`FinancialReporterJob`)**:
+  * 遵循 DRY（Don't Repeat Yourself）原则，日/周/月三套分析链路**高度收敛于同一个通用 Flink 批处理作业**；
+  * 通过参数 `--period=daily/weekly/monthly`（或环境变量 `REPORT_PERIOD`）动态多态驱动：
+    * 动态选择对应的 Trino DWS 视图（`dws_financial_summary_daily` / `weekly` / `monthly`）；
+    * 动态计算周期主键与时间窗口；
+    * 动态隔离维护独立的断点续传水位游标；
+  * 完全纳入 `JobLauncher` 统一路由体系（`FLINK_JOB_NAME=report`）；
+* **三维独立水位表防重机制 (`etl_sync_offsets`)**:
+  * 周期作业在启动时执行**幂等防御检查 (Idempotency Guard)**，若当前周期已成功落盘，则安全跳过，绝不重复生成或骚扰主人：
+    * `report-daily`: 游标键 `last_offset` 采用自然日编码（如 `20261003L`）；
+    * `report-weekly`: 游标键 `last_offset` 采用 ISO 周编码（如 `202640L`）；
+    * `report-monthly`: 游标键 `last_offset` 采用月份编码（如 `202609L`）；
 * **大模型 Agent 框架**: **`LangChain4j` (版本: `0.35.0`+)**
   * 模块依赖：`dev.langchain4j:langchain4j-open-ai`（轻量独立，零 Spring 捆绑）；
   * 编程模式：**声明式 `AiServices`**，定义 `FinancialAdvisorService` 接口，配合 `@SystemMessage` 与 `@UserMessage` 动态代理生成；

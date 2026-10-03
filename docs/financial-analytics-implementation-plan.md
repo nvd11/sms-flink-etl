@@ -59,7 +59,7 @@
 ---
 
 ### 📌 Milestone 3: ADS 湖仓落盘、Flink 双写与 Yui Slack 集成 (预计耗时: 1 天)
-* **核心目标**：构建 ADS 持久化物理表 `ads_financial_reports`，在 Flink 算子链中实现**“分析结果落盘湖仓 ➕ Yui Slack 私信投递”双写闭环**。
+* **核心目标**：构建 ADS 持久化物理表 `ads_financial_reports`，在 Flink 算子链中实现**“分析结果落盘湖仓 ➕ Yui Slack 私信投递”双写闭环**，并以单一通用 Job 靠参数多态驱动日/周/月。
 * **具体任务项**：
   1. **编写 ADS 事实表 DDL (`scripts/schema-ads.sql`)**：
      * 在 `iceberg.finance` 和 `iceberg.finance_dev` 创建 `ads_financial_reports`；
@@ -68,9 +68,12 @@
   2. **领域模型与 RowData 映射器**：
      * `com.finance.etl.model.FinancialReport.java`；
      * `com.finance.etl.sink.iceberg.FinancialReportToRowDataMapper.java`；
-  3. **Flink 批处理主作业 (`FinancialReporterJob.java`)**：
-     * 继承 Flink 正统血脉，支持 `FLINK_JOB_NAME=report`；
-     * Flink 算子编排：`Trino DWS Source ➔ FinancialAdvisorProcessFunction ➔ [IcebergR2Sink (ADS表) + SlackYuiSink (私聊)]`；
+  3. **通用 Flink 批处理主作业 (`FinancialReporterJob.java`)**：
+     * 遵循 DRY 架构，以单一通用 Job 承载日/周/月三套分析需求；
+     * 支持命令行参数 `--period=daily/weekly/monthly`（或环境变量 `REPORT_PERIOD`）；
+     * 多态选择 Trino DWS 视图，并以独立复合游标（`report-daily`, `report-weekly`, `report-monthly`）在 `etl_sync_offsets` 推进水位；
+     * 具备**启动前幂等防御检查**：已跑过当前周期则秒级跳过，杜绝重复落盘与消息骚扰；
+     * Flink 双写算子编排：`Trino DWS Source ➔ FinancialAdvisorProcessFunction ➔ [IcebergR2Sink (ADS表) + SlackYuiSink (私聊)]`；
   4. **QuickChart 短链与 Slack Block Kit 发送器**：
      * 封装标准 `POST https://quickchart.io/chart/create` API，彻底规避裂图隐患；
      * 组装 Slack Block Kit 发送器并私聊直达主人 `U0AM8G9AARF`；
@@ -83,12 +86,12 @@
 * **核心目标**：实现无人值守、定时自动推送，打造全天候贴身伴随体验。
 * **具体任务项**：
   1. **编排推送时钟策略**：
-     * ☕ **每日晚报**：每天 22:30 自动推送当日账单；
-     * 📅 **每周复盘**：每周日晚 23:00 自动推送本周体检；
-     * 🏆 **每月大盘**：每月 1 日早 09:00 自动推送上月全貌；
-  2. **轻量执行载体落地（二选一）**：
-     * **选项 A（GitHub Actions Cron，最轻便）**：直接配置 GitHub 定时工作流唤起推送脚本；
-     * **选项 B（NUC K3s CronJob，局域网直连）**：在 K3s `batch-jobs` 下部署轻量 Python/Node 镜像，直连局域网 Trino 和 Slack API；
+     * ☕ **每日晚报 (`report-daily`)**：每天 23:00 自动触发，带 `--period=daily`；
+     * 📅 **每周复盘 (`report-weekly`)**：每周日晚 23:00 自动触发，带 `--period=weekly`；
+     * 🏆 **每月大盘 (`report-monthly`)**：每月末 23:30 自动触发，带 `--period=monthly`；
+  2. **调度工作流改造 (`trigger-nuc-batch-runner.yml`)**：
+     * 扩展 `pipeline_stage` 支持 `report-daily`, `report-weekly`, `report-monthly`；
+     * 在 K3s 上拉起 Pod 并注入对应参数与环境变量；
   3. **验收标准**：
      * 经历一次真实的定时触发，主人在设定时间准时收到 Yui 的自动私信。
 
