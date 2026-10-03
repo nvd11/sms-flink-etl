@@ -116,17 +116,15 @@ public class SmsRecordToDwdTransactionMapper extends RichMapFunction<SmsRecord, 
         Map<String, Object> categoryRes = categoryExtractor.extract(record);
         String category = (String) categoryRes.get("category");
 
-        // 2. 生成动账事实唯一标识 (txId: 格式为 tx_<rawRecordId>_<timestampMs>)
-        String txId = String.format("tx_%d_%d",
-                record.getId() != null ? record.getId() : 0L,
-                txTime.toEpochMilli());
+        // 2. 动账事实唯一主键 ID (直接继承并对齐 ODS raw_record_id，保障纯数字单调递增)
+        Long id = record.getId();
 
         String institution = record.getSender();
 
         Instant etlCreatedAt = Instant.now();
 
         FinancialTransaction tx = new FinancialTransaction(
-                txId,
+                id,
                 record.getId(),
                 txTime,
                 amount,
@@ -144,8 +142,8 @@ public class SmsRecordToDwdTransactionMapper extends RichMapFunction<SmsRecord, 
                 etlCreatedAt
         );
 
-        LOG.debug("✨ [DwdMapper] Converted ID: {} => txId: {}, isValid: {}, amount: {} {}, type: {}",
-                record.getId(), txId, isValidTx, amount, currency, txType);
+        LOG.debug("✨ [DwdMapper] Converted ID: {} => isValid: {}, amount: {} {}, type: {}",
+                record.getId(), isValidTx, amount, currency, txType);
 
         return tx;
     }

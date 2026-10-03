@@ -13,7 +13,7 @@ import org.apache.flink.table.data.TimestampData;
  * 职责：纯函数、无状态。
  * 将领域模型 FinancialTransaction 转换为 Flink 底层列式内存行 GenericRowData。
  * 16 个字段与 iceberg.finance.dwd_financial_transactions 表结构严格按索引绝对对齐：
- * 0:  id (VARCHAR)
+ * 0:  id (BIGINT)
  * 1:  raw_record_id (BIGINT)
  * 2:  tx_time (TIMESTAMP(6) WITH TIME ZONE) -> 触发 Iceberg month(tx_time) 隐藏分区
  * 3:  amount (DECIMAL(12, 2))
@@ -41,8 +41,8 @@ public class FinancialTransactionToRowDataMapper implements MapFunction<Financia
 
         GenericRowData row = new GenericRowData(16);
 
-        // 0. id (VARCHAR)
-        row.setField(0, tx.getId() != null ? StringData.fromString(tx.getId()) : null);
+        // 0. id (BIGINT)
+        row.setField(0, tx.getId());
 
         // 1. raw_record_id (BIGINT)
         row.setField(1, tx.getRawRecordId());

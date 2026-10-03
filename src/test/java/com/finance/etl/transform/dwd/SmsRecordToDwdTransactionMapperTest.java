@@ -25,7 +25,7 @@ class SmsRecordToDwdTransactionMapperTest {
 
         assertNotNull(tx);
         assertEquals(441L, tx.getRawRecordId());
-        assertTrue(tx.getId().startsWith("tx_441_"));
+        assertEquals(441L, tx.getId());
         assertTrue(tx.getIsValidTx());
         assertEquals(new BigDecimal("9.95"), tx.getAmount());
         assertEquals("CNY", tx.getCurrency());

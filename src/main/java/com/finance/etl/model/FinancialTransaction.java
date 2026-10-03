@@ -13,7 +13,7 @@ public class FinancialTransaction implements Serializable {
     private static final long serialVersionUID = 1L;
 
     // 1. 业务主键与血缘追溯 (Lineage)
-    private String id;                  // 动账事实唯一标识主键 (如 'tx_317_1727957427000')
+    private Long id;                    // 动账事实全局单调递增 ID (直接对齐 raw_sms_records.id)
     private Long rawRecordId;           // 关联的 ODS 原始记录 ID (raw_sms_records.id)
 
     // 2. 时间维度 (Time Dimension)
@@ -44,7 +44,7 @@ public class FinancialTransaction implements Serializable {
     public FinancialTransaction() {
     }
 
-    public FinancialTransaction(String id, Long rawRecordId, Instant txTime, BigDecimal amount,
+    public FinancialTransaction(Long id, Long rawRecordId, Instant txTime, BigDecimal amount,
                                 String currency, String direction, String txType, String institution,
                                 String accountType, String cardTail, String paymentChannel,
                                 String counterparty, String cleanedMerchant, String category,
@@ -67,11 +67,11 @@ public class FinancialTransaction implements Serializable {
         this.etlCreatedAt = etlCreatedAt;
     }
 
-    public String getId() {
+    public Long getId() {
         return id;
     }
 
-    public void setId(String id) {
+    public void setId(Long id) {
         this.id = id;
     }
 

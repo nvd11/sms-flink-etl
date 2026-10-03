@@ -11,7 +11,7 @@
 -- 1. 生产环境 DWD 动账事实表
 CREATE TABLE IF NOT EXISTS iceberg.finance.dwd_financial_transactions (
     -- 1. 业务主键与血缘追溯 (Lineage)
-    id                  VARCHAR,                             -- 动账事实唯一标识主键 (如 'tx_317_1727957427000')
+    id                  BIGINT,                              -- 动账事实全局单调递增 ID (直接对齐 raw_sms_records.id)
     raw_record_id       BIGINT,                              -- 🎯 唯一血缘外键 (关联 raw_sms_records.id)
 
     -- 2. 时间维度 (Time Dimension · 权威交易时间)
@@ -46,7 +46,7 @@ WITH (
 
 -- 2. 开发环境 DWD 动账事实表
 CREATE TABLE IF NOT EXISTS iceberg.finance_dev.dwd_financial_transactions (
-    id                  VARCHAR,
+    id                  BIGINT,
     raw_record_id       BIGINT,
     tx_time             TIMESTAMP(6) WITH TIME ZONE,
     amount              DECIMAL(12, 2),

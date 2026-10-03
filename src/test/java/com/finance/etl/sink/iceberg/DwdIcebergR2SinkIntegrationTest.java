@@ -24,7 +24,7 @@ class DwdIcebergR2SinkIntegrationTest {
 
         Instant now = Instant.now();
         FinancialTransaction tx = new FinancialTransaction(
-                "tx-20261003-001",
+                441L,
                 441L,
                 now,
                 new BigDecimal("9.95"),

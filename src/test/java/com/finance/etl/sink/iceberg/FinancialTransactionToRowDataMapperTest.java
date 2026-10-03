@@ -22,7 +22,7 @@ class FinancialTransactionToRowDataMapperTest {
 
         Instant now = Instant.now();
         FinancialTransaction tx = new FinancialTransaction(
-                "tx-20261003-001",
+                441L,
                 441L,
                 now,
                 new BigDecimal("9.95"),
@@ -45,8 +45,8 @@ class FinancialTransactionToRowDataMapperTest {
         assertNotNull(row);
         assertEquals(16, row.getArity(), "DWD 行列数必须严格等于 16 列");
 
-        // 验证索引与类型 (0 号字段为 id)
-        assertEquals("tx-20261003-001", row.getString(0).toString());
+        // 验证索引与类型 (0 号字段为 BIGINT id)
+        assertEquals(441L, row.getLong(0));
         assertEquals(441L, row.getLong(1));
         assertEquals(now.toEpochMilli(), row.getTimestamp(2, 6).getMillisecond());
         assertEquals(new BigDecimal("9.95"), row.getDecimal(3, 12, 2).toBigDecimal());
