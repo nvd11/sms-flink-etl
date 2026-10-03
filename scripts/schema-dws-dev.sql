@@ -1,13 +1,15 @@
 -- ====================================================================
 -- DWS 财务服务汇总层 (Data Warehouse Summary) 聚合视图规范 (DEV 环境)
 -- 数据基石: iceberg.finance_dev.dwd_financial_transactions
--- 引擎支持: Trino (支持原生 Iceberg View 开放标准持久化存储)
+-- 核心增强: 引入 min_id 与 max_id 物理行号聚合，完美支撑水位追踪与防漏单
 -- ====================================================================
 
 -- 1. 每日财务汇总视图 (Daily Financial Summary)
 CREATE OR REPLACE VIEW iceberg.finance_dev.dws_financial_summary_daily AS
 SELECT 
     date(tx_time) AS stat_date,
+    min(id) AS min_id,
+    max(id) AS max_id,
     day_of_week(tx_time) AS day_of_week,
     day_of_week(tx_time) IN (6, 7) AS is_weekend,
     count(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE', 1, null)) AS tx_count,
@@ -34,6 +36,8 @@ SELECT
     concat(cast(year_of_week(tx_time) as varchar), '-W', lpad(cast(week(tx_time) as varchar), 2, '0')) AS week_period,
     min(date(tx_time)) AS week_start_date,
     max(date(tx_time)) AS week_end_date,
+    min(id) AS min_id,
+    max(id) AS max_id,
     count(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE', 1, null)) AS tx_count,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and currency='CNY', amount, 0)) AS total_expense,
     sum(if(is_valid_tx and direction='INFLOW' and tx_type='REFUND' and currency='CNY', amount, 0)) AS total_refund,
@@ -55,6 +59,8 @@ GROUP BY year_of_week(tx_time), week(tx_time);
 CREATE OR REPLACE VIEW iceberg.finance_dev.dws_financial_summary_monthly AS
 SELECT 
     date_format(tx_time, '%Y-%m') AS stat_month,
+    min(id) AS min_id,
+    max(id) AS max_id,
     count(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE', 1, null)) AS tx_count,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and currency='CNY', amount, 0)) AS total_expense_cny,
     sum(if(is_valid_tx and direction='INFLOW' and tx_type='REFUND' and currency='CNY', amount, 0)) AS total_refund_cny,
@@ -77,6 +83,8 @@ CREATE OR REPLACE VIEW iceberg.finance_dev.dws_merchant_spending_ranking AS
 SELECT 
     date_format(tx_time, '%Y-%m') AS stat_month,
     coalesce(cleaned_merchant, counterparty, '未知商户') AS merchant_name,
+    min(id) AS min_id,
+    max(id) AS max_id,
     count(1) AS tx_count,
     sum(amount) AS total_amount_cny,
     round(avg(amount), 2) AS avg_amount_cny
