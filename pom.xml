@@ -52,6 +52,11 @@
             <artifactId>flink-table-runtime</artifactId>
             <version>${flink.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-base</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
 
         <!-- 2. Apache Iceberg Flink Runtime (支持 Flink 1.19) -->
         <dependency>
