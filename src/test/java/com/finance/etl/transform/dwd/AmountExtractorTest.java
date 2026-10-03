@@ -83,4 +83,77 @@ class AmountExtractorTest {
         assertTrue(extractor.extract(createRecord("")).isEmpty());
         assertTrue(extractor.extract(createRecord("    ")).isEmpty());
     }
+
+    @Test
+    @DisplayName("从 Dev 存储桶读取全部真实的 ODS 短信，批量提取并审计金额与币种合理性")
+    void testExtractAllSmsFromDevTable() throws Exception {
+        org.apache.iceberg.flink.TableLoader tableLoader =
+                com.finance.etl.repository.IcebergCatalogFactory.createTableLoader("finance_dev", "raw_sms_records");
+        tableLoader.open();
+        org.apache.iceberg.Table table = tableLoader.loadTable();
+
+        int totalCount = 0;
+        int extractedCount = 0;
+        int nonTxCount = 0;
+        BigDecimal totalAmountCNY = BigDecimal.ZERO;
+        BigDecimal totalAmountUSD = BigDecimal.ZERO;
+
+        System.out.println("================================================================================");
+        System.out.println("📊 [Dev Lakehouse SMS Audit] Reading all records from finance_dev.raw_sms_records...");
+        System.out.println("================================================================================");
+
+        try (org.apache.iceberg.io.CloseableIterable<org.apache.iceberg.data.Record> records =
+                     org.apache.iceberg.data.IcebergGenerics.read(table).build()) {
+            for (org.apache.iceberg.data.Record r : records) {
+                totalCount++;
+                Long id = r.get(0, Long.class);
+                String msgUid = r.get(1, String.class);
+                String channel = r.get(2, String.class);
+                String sender = r.get(3, String.class);
+                String receiverPhone = r.get(4, String.class);
+                String rawBody = r.get(6, String.class);
+
+                SmsRecord sms = new SmsRecord(id, msgUid, channel, sender, receiverPhone, null, rawBody, null);
+                Map<String, Object> result = extractor.extract(sms);
+
+                if (!result.isEmpty()) {
+                    extractedCount++;
+                    BigDecimal amount = (BigDecimal) result.get("amount");
+                    String currency = (String) result.get("currency");
+
+                    assertNotNull(amount, "提取的金额不可为 null");
+                    assertNotNull(currency, "提取的币种不可为 null");
+                    assertTrue(amount.compareTo(BigDecimal.ZERO) > 0, "金额必须为正数");
+
+                    if ("USD".equals(currency)) {
+                        totalAmountUSD = totalAmountUSD.add(amount);
+                    } else if ("CNY".equals(currency)) {
+                        totalAmountCNY = totalAmountCNY.add(amount);
+                    }
+
+                    // 打印提取出来的样本
+                    if (extractedCount <= 30 || extractedCount % 20 == 0) {
+                        System.out.printf("  [#%3d | ID:%3d | %-4s] => %10s %-3s | %s\n",
+                                extractedCount, id, sender != null ? sender : "N/A", amount, currency,
+                                rawBody != null && rawBody.length() > 55 ? rawBody.substring(0, 55).replace("\n", " ") + "..." : rawBody);
+                    }
+                } else {
+                    nonTxCount++;
+                }
+            }
+        }
+
+        System.out.println("================================================================================");
+        System.out.println("📈 [Audit Summary]");
+        System.out.printf("  • 总扫描记录数 (Total ODS): %d 封\n", totalCount);
+        System.out.printf("  • 成功提炼出金额 (Extracted): %d 笔动账 (占有效比例: %.1f%%)\n",
+                extractedCount, totalCount > 0 ? (double) extractedCount * 100 / totalCount : 0);
+        System.out.printf("  • 判定为非动账/纯通知 (Non-Tx): %d 封 (验证码/广告/服务号提醒)\n", nonTxCount);
+        System.out.printf("  • 人民币总金额 (Total CNY): ￥%s\n", totalAmountCNY.toPlainString());
+        System.out.printf("  • 美元总金额   (Total USD): $%s\n", totalAmountUSD.toPlainString());
+        System.out.println("================================================================================");
+
+        assertTrue(totalCount > 0, "Dev 表中必须有数据可供审计");
+        assertTrue(extractedCount > 0, "必须成功提炼出至少部分动账金额");
+    }
 }
