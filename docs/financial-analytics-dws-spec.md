@@ -123,9 +123,9 @@
 
 ---
 
-## 4. 辅助维度专题汇总表 (Dimensional Marts)
+## 4. 辅助维度专题与应用报表层 (DWS & ADS Marts)
 
-为了支撑前端看板交互与排行榜渲染，需配套建立两大专用多维分析视图：
+为了支撑前端看板交互与排行榜渲染，以及将 AI 智能生成的报告结果永久沉淀入湖，建立两大专用多维分析视图与一张核心 ADS 应用事实表：
 
 ### 4.1 核心商户排行榜 (Merchant Spending Mart)
 * **目标模型**：`iceberg.finance.dws_merchant_spending_ranking`
@@ -140,6 +140,35 @@
 * **分析维度**：按月统计：
   * **支付通路分布**：支付宝（`ALIPAY`）vs 微信支付（`WECHAT_PAY`）vs 直连扣款（`DIRECT`）vs 银联（`UNIONPAY`）金额比例；
   * **主卡消耗监控**：广发 3342 主卡的当月实际已出账单模拟。
+
+### 4.3 ADS 应用层：智能财务报告持久化事实表 (Financial Reports Fact Table)
+* **目标实体**：`iceberg.finance.ads_financial_reports` (生产) / `iceberg.finance_dev.ads_financial_reports` (测试)
+* **业务定位**：持久化归档每一次由 Flink 批处理驱动 LLM 产出的指标快照、点评文字与图表短链，建立永久有据可查的个人财务数字资产。
+
+#### 字段规格：
+| 字段名 | 物理类型 | 说明与示例 |
+| :--- | :--- | :--- |
+| `report_id` | `VARCHAR` | 报告唯一主键 (如 `'report_daily_2026-10-03'`, `'report_weekly_2026-W40'`, `'report_monthly_2026-09'`) |
+| `period_type` | `VARCHAR` | 周期类型: `'DAILY'`, `'WEEKLY'`, `'MONTHLY'` |
+| `period_value` | `VARCHAR` | 周期取值标识 (如 `'2026-10-03'`, `'2026-W40'`, `'2026-09'`) |
+| `report_date` | `DATE` | 报告归属日期 (用于 Iceberg 分区与快速范围检索) |
+| `total_expense` | `DECIMAL(12,2)` | 周期总消费支出 (CNY) |
+| `total_refund` | `DECIMAL(12,2)` | 周期冲正退款总额 (CNY) |
+| `net_expense` | `DECIMAL(12,2)` | 周期真实净支出 (CNY) |
+| `total_income` | `DECIMAL(12,2)` | 周期被动收入/理赔总额 (CNY) |
+| `total_transfer`| `DECIMAL(12,2)` | 周期信用卡大额还款流水 (CNY) |
+| `tx_count` | `INTEGER` | 周期内有效动账交易笔数 |
+| `metrics_json` | `VARCHAR` | 结构化关键分类与商户切片快照 JSON |
+| `summary_text` | `VARCHAR` | **LLM (Gemini 3.8 Flash) 生成的专业总结与 Yui 温存点评文本** |
+| `chart_type` | `VARCHAR` | 图表类型: `'DOUGHNUT'` (环形饼图), `'BAR'` (横向柱状图) |
+| `chart_url` | `VARCHAR` | **QuickChart 生成的高清短链永久图片链接** |
+| `slack_status` | `VARCHAR` | Slack 私信履约状态: `'SENT'`, `'FAILED'`, `'PENDING'` |
+| `created_at` | `TIMESTAMP(6)`| 报告生成入湖时间戳 |
+
+#### 湖仓落盘策略：
+* **存储格式**：`PARQUET` 列存
+* **隐藏分区**：`partitioning = ARRAY['month(report_date)']`
+* **主键防重与更新**：基于 Format V2 Equality Delete Upsert，等价主键锁定为 `[report_id, report_date]`，重复运行同一天/周/月时平滑自动覆盖刷新！
 
 ---
 
@@ -223,13 +252,19 @@ Yui 通过 Slack 原生 Web API（`chat.postMessage`）与主人（`U0AM8G9AARF`
 ```mermaid
 graph TB
     DWD["iceberg.finance.dwd_financial_transactions<br/>(事实明细表)"] -->|SQL 窗口与分组聚合| DWS["Trino DWS 汇总模型<br/>(Daily / Weekly / Monthly 视图)"]
-    DWS -->|Trino REST API / JDBC| AGENT["Java 财务分析 Agent<br/>(LangChain4j AiServices 驱动)"]
-    AGENT -->|OpenAI 兼容协议 / Gemini 3.8 Flash| LITELLM["LiteLLM 统一网关<br/>(https://gw.jppwl.asia/litellm/v1)"]
-    LITELLM -->|智能洞察 / 贴心点评 / 预警建议| AGENT
-    AGENT -->|QuickChart 短链 API + Slack Block Kit| YUI["Slack Bot Yui (chat.postMessage)<br/>(私信直达主人 U0AM8G9AARF)"]
+    DWS -->|Trino REST/JDBC API| SOURCE["Flink Report Source 算子<br/>(读取待分析周期指标)"]
+    SOURCE -->|DataStream| FUNC["FinancialAdvisorProcessFunction<br/>(RichMapFunction 核心大脑)"]
+    FUNC -->|LangChain4j AiServices| LITELLM["LiteLLM 统一网关<br/>(Gemini-3.8-Flash)"]
+    FUNC -->|POST /chart/create| QC["QuickChart 图表短链服务"]
+    FUNC -->|双流输出: FinancialReport| SINK_SPLIT{"Flink 输出路由"}
+    SINK_SPLIT -->|落盘分支: IcebergR2Sink| ADS["iceberg.finance.ads_financial_reports<br/>(ADS 智能报告事实表)"]
+    SINK_SPLIT -->|推送分支: SlackYuiSink| YUI["Slack Bot Yui (chat.postMessage)<br/>(私信直达主人 U0AM8G9AARF)"]
 ```
 
 ### 6.1 核心技术栈选型与规范 (Tech Stack & Conventions)
+* **Flink 批处理纯正血统**:
+  * 报告生成流程由专职批处理作业 **`FinancialReporterJob`** 统一驱动，完全纳入 `JobLauncher` 统一分发体系（`FLINK_JOB_NAME=report`）；
+  * 计算流程遵循 Flink 算子生命周期管控与单写漏斗控制（`writeParallelism=1`）；
 * **大模型 Agent 框架**: **`LangChain4j` (版本: `0.35.0`+)**
   * 模块依赖：`dev.langchain4j:langchain4j-open-ai`（轻量独立，零 Spring 捆绑）；
   * 编程模式：**声明式 `AiServices`**，定义 `FinancialAdvisorService` 接口，配合 `@SystemMessage` 与 `@UserMessage` 动态代理生成；

@@ -38,7 +38,7 @@
 
 ---
 
-### 📌 Milestone 2: 财务分析 Agent 与 LangChain4j 驱动 (预计耗时: 1 天)
+### 📌 Milestone 2: 财务分析 Agent 与 LangChain4j 算子构建 (预计耗时: 1 天)
 * **核心目标**：采用 **LangChain4j (0.35.0+)** 声明式 `AiServices` 驱动，直连私有 LiteLLM 网关（姿势 A），调度 `gemini-3.8-flash` 产出专业温暖的财务报告。
 * **具体任务项**：
   1. **引入 Maven 依赖**：
@@ -47,30 +47,35 @@
      * 采用 `@SystemMessage` 锁定 Yui 贴身秘书 + CFA 级财务分析人设；
      * 采用 `@UserMessage` 动态注入周期标签与 DWS 聚合指标 JSON；
      * 严格防范幻觉：严禁捏造金额，严格基于输入上下文；
-  3. **模型实例装配 (姿势 A · 统一网关)**：
-     * 使用 `OpenAiChatModel.builder()` 直连 `https://gw.jppwl.asia/litellm/v1`；
-     * 注入 Yui 专属凭证 `sk-WhW6BWdwKN_LITjCuAmgiA`，模型锁定为 `gemini-3.8-flash`；
-  4. **数据提炼与编排 (`FinancialAnalysisAgent.java`)**：
-     * 编排 `TrinoDwsClient` 拉取指标 ➔ 组装结构化上下文 ➔ 驱动 LangChain4j 产出专业洞察点评；
+  3. **模型工厂与 DAO 层装配**：
+     * `FinancialChatModelFactory.java` 封装直连 `https://gw.jppwl.asia/litellm/v1`，调度 `gemini-3.8-flash`；
+     * `FinancialDwsDao.java` 负责从 Trino 中秒级捞取日/周/月聚合指标与商户排行切片；
+     * `FinancialLakehouseTools.java` 用 `@Tool` 暴露数据查询能力；
+  4. **智能体实体类 (`FinancialAdvisorAgent.java`)**：
+     * 纯正智能体，内置 `fromConfig()`，持有工具箱、模型并提供高级分析方法；
   5. **验收标准**：
      * 编写 JUnit 测试，成功跑通 9 月全量数据的 Gemini 智能总结与深度点评。
 
 ---
 
-### 📌 Milestone 3: Yui Slack 富文本卡片与图表集成 (预计耗时: 1 天)
-* **核心目标**：将 DWS 指标、QuickChart 高清图表与 LangChain4j 点评文本组装为 Slack Block Kit 消息，私信直达主人。
+### 📌 Milestone 3: ADS 湖仓落盘、Flink 双写与 Yui Slack 集成 (预计耗时: 1 天)
+* **核心目标**：构建 ADS 持久化物理表 `ads_financial_reports`，在 Flink 算子链中实现**“分析结果落盘湖仓 ➕ Yui Slack 私信投递”双写闭环**。
 * **具体任务项**：
-  1. **QuickChart 短链渲染客户端 (`QuickChartClient.java`)**：
-     * 封装标准 `POST https://quickchart.io/chart/create` API，彻底规避 URL 编码截断与裂图隐患；
-     * 动态生成：环形消费分类饼图（`doughnut`）与核心商户横向柱状图（`horizontalBar`）；
-  2. **Slack Block Kit 发送器 (`YuiSlackSender.java`)**：
-     * 调用 Slack 原生 Web API `chat.postMessage`；
-     * 发送至主人专属私聊频道 `U0AM8G9AARF`；
-     * 支持日结小卡片、周度体检图文大卡片、月度全景白皮书大卡片；
-  3. **安全凭证注入与集成**：
-     * 环境变量 `SLACK_YUI_BOT_TOKEN` 安全纳管；
-  4. **验收标准**：
-     * 运行端到端测试，主人的 Slack 收到图文并茂、排版精美的真实 9 月度财务复盘大卡片。
+  1. **编写 ADS 事实表 DDL (`scripts/schema-ads.sql`)**：
+     * 在 `iceberg.finance` 和 `iceberg.finance_dev` 创建 `ads_financial_reports`；
+     * 包含指标快照、LLM 分析文本、QuickChart 图片短链、Slack 履约状态；
+     * 锁定主键 `[report_id, report_date]` 支撑幂等 Equality Delete Upsert；
+  2. **领域模型与 RowData 映射器**：
+     * `com.finance.etl.model.FinancialReport.java`；
+     * `com.finance.etl.sink.iceberg.FinancialReportToRowDataMapper.java`；
+  3. **Flink 批处理主作业 (`FinancialReporterJob.java`)**：
+     * 继承 Flink 正统血脉，支持 `FLINK_JOB_NAME=report`；
+     * Flink 算子编排：`Trino DWS Source ➔ FinancialAdvisorProcessFunction ➔ [IcebergR2Sink (ADS表) + SlackYuiSink (私聊)]`；
+  4. **QuickChart 短链与 Slack Block Kit 发送器**：
+     * 封装标准 `POST https://quickchart.io/chart/create` API，彻底规避裂图隐患；
+     * 组装 Slack Block Kit 发送器并私聊直达主人 `U0AM8G9AARF`；
+  5. **验收标准**：
+     * 运行端到端测试，主人的 Slack 收到图文并茂的卡片，同时在 Trino 中 `SELECT * FROM iceberg.finance_dev.ads_financial_reports` 成功查出落盘的完整报告与图表短链！
 
 ---
 
