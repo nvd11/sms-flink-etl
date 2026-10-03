@@ -10,6 +10,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,8 +40,9 @@ class AmountExtractorTest {
             "'10690661440018【中意人寿】尊敬的潘文林：您的理赔申请已通过审核，赔款金额245元将于0-5个工作日到账', 245.00, CNY",
             "'【微信支付】微信零钱已向某某便利店成功付款8.00元。SubId：1', 8.00, CNY",
             "'【支付宝】花呗自动扣款通知：扣款成功299.00元。SubId：2', 299.00, CNY",
-            "'10681128000113【分子借钱】尾号1962 用户交易成功 人民币2,743.3元预核准至您支付账户', 2743.30, CNY",
+            "'106980095508【广发银行】您尾号3342信用卡16日00:43还款人民币17253.33元，到账后0', 17253.33, CNY",
             "'106910095366【汇丰银行中国】温馨提示：您尾号0025的美元信用卡当月账单为5.99元，最低还款额为0.30元', 5.99, USD",
+            "'106910095366【汇丰银行中国】您尾号为0025的美元信用卡当月账单应还款金额为5.99元，最低还款额为0.30元', 5.99, USD",
             "'106980095516【中国银联】付款验证码527521，任何人索取均为诈骗！尾号3342的银行卡向中国平安财产保险付款6646.00元，请勿泄露！', 6646.00, CNY"
     })
     void testExtractRealSmsAmounts(String rawBody, String expectedAmount, String expectedCurrency) {
@@ -60,6 +63,8 @@ class AmountExtractorTest {
     @DisplayName("测试非动账短信（纯验证码、营销广告、无金额通知）安全返回空 Map")
     void testNonTransactionMessagesReturnEmpty() {
         String[] nonTxSamples = {
+                "10681128000113【分子借钱】尾号1962 用户交易成功 人民币2,743.3元预核准至您支付账户 查余额详情",
+                "106828023000336【智花】1962用户预放款成功 人民币8958元额于8:00已发放至您支付账户 查余额详情",
                 "106980095188000001【支付宝】支付宝验证码：283094，请勿向他人泄露您的验证码！唯一热线95188",
                 "10693795818363665【平安保险】您的车险投保验证码为610569。投保人：潘文林，请妥善保管。",
                 "com.tencent.mm广发信用卡: 交易成功提醒服务号UID：103362026-10-03 10:58:33",
@@ -97,6 +102,8 @@ class AmountExtractorTest {
         int nonTxCount = 0;
         BigDecimal totalAmountCNY = BigDecimal.ZERO;
         BigDecimal totalAmountUSD = BigDecimal.ZERO;
+        List<String> outLines = new ArrayList<>();
+        List<String> missedCandidates = new ArrayList<>();
 
         System.out.println("================================================================================");
         System.out.println("📊 [Dev Lakehouse SMS Audit] Reading all records from finance_dev.raw_sms_records...");
@@ -131,23 +138,30 @@ class AmountExtractorTest {
                         totalAmountCNY = totalAmountCNY.add(amount);
                     }
 
-                    // 打印提取出来的样本
-                    if (extractedCount <= 30 || extractedCount % 20 == 0) {
-                        System.out.printf("  [#%3d | ID:%3d | %-4s] => %10s %-3s | %s\n",
-                                extractedCount, id, sender != null ? sender : "N/A", amount, currency,
-                                rawBody != null && rawBody.length() > 55 ? rawBody.substring(0, 55).replace("\n", " ") + "..." : rawBody);
-                    }
+                    // 输出到列表用于全面审计
+                    outLines.add(String.format("[EXTRACTED #%3d | ID:%3d | %-4s] => %10s %-3s | %s",
+                            extractedCount, id, sender != null ? sender : "N/A", amount, currency, rawBody));
                 } else {
                     nonTxCount++;
+                    // 检查是否有漏网之鱼：如果正文包含金融金额相关字样，但被漏掉了
+                    if (rawBody != null && (rawBody.contains("消费") || rawBody.contains("退款") || rawBody.contains("已付") || rawBody.contains("赔款"))) {
+                        missedCandidates.add(String.format("[MISSED? ID:%3d | %-4s] | %s",
+                                id, sender != null ? sender : "N/A", rawBody));
+                    }
                 }
             }
         }
+
+        // 写入审计文件供逐条核验
+        java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/opencode/amount_audit_all.txt"), outLines);
+        java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/opencode/amount_audit_missed.txt"), missedCandidates);
 
         System.out.println("================================================================================");
         System.out.println("📈 [Audit Summary]");
         System.out.printf("  • 总扫描记录数 (Total ODS): %d 封\n", totalCount);
         System.out.printf("  • 成功提炼出金额 (Extracted): %d 笔动账 (占有效比例: %.1f%%)\n",
                 extractedCount, totalCount > 0 ? (double) extractedCount * 100 / totalCount : 0);
+        System.out.printf("  • 疑似漏网动账 (Potential Missed): %d 封\n", missedCandidates.size());
         System.out.printf("  • 判定为非动账/纯通知 (Non-Tx): %d 封 (验证码/广告/服务号提醒)\n", nonTxCount);
         System.out.printf("  • 人民币总金额 (Total CNY): ￥%s\n", totalAmountCNY.toPlainString());
         System.out.printf("  • 美元总金额   (Total USD): $%s\n", totalAmountUSD.toPlainString());
