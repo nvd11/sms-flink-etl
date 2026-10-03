@@ -122,7 +122,3 @@ jobs:
           echo "================================================================================"
           echo "🎉 All requested batch stages executed successfully on NUC!"
           echo "================================================================================"
-
-          echo "$LOGS"
-
-          echo "🎉 Batch job completed! Pod lifecycle and cleanup natively managed by Kubernetes ttlSecondsAfterFinished."
