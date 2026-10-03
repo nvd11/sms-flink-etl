@@ -38,6 +38,25 @@ WITH (
     format = 'PARQUET'
 );
 
+-- 3.1 批处理作业执行足迹审计表 (对标 Spring Batch BATCH_JOB_EXECUTION，含 Workers 运行摘要)
+CREATE TABLE IF NOT EXISTS iceberg.finance_dev.etl_job_executions (
+    execution_id    VARCHAR,                             -- 批次唯一执行流水号 (如 'exec_ods_1727957427000')
+    job_name        VARCHAR,                             -- 作业名称: 'sms-gmail-r2', 'sms-ods-to-dwd', 'report-daily'
+    status          VARCHAR,                             -- 执行状态: 'SUCCESS', 'FAILED', 'RUNNING'
+    start_time      TIMESTAMP(6) WITH TIME ZONE,         -- 批处理启动时间
+    end_time        TIMESTAMP(6) WITH TIME ZONE,         -- 批处理结束时间
+    net_runtime_ms  BIGINT,                              -- Flink 净执行耗时 (毫秒)
+    records_in      BIGINT,                              -- 本批次读取/输入记录数
+    records_out     BIGINT,                              -- 本批次清洗落盘记录数
+    last_offset     BIGINT,                              -- 本次成功推进到的增量水位
+    workers_summary VARCHAR,                             -- 各并行 Worker / Subtask 运行指标聚合 JSON
+    error_message   VARCHAR,                             -- 失败时的异常信息 (成功时为 NULL)
+    created_at      TIMESTAMP(6) WITH TIME ZONE          -- 审计记录入湖时间
+)
+WITH (
+    format = 'PARQUET'
+);
+
 -- 4. 开发测试用 DWD 金融动账明细事实表
 CREATE TABLE IF NOT EXISTS iceberg.finance_dev.dwd_financial_transactions (
     -- 1. 业务主键与血缘追溯 (Lineage)
