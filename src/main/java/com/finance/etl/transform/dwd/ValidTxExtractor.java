@@ -62,22 +62,26 @@ public class ValidTxExtractor implements DwdFieldExtractor {
         if (text.startsWith("com.tencent.mm广发信用卡: 交易成功提醒服务号UID：")) {
             return true;
         }
-        // 2. 排除纯验证码短信
-        if (text.contains("验证码") && !text.contains("消费") && !text.contains("付款") && !text.contains("已付")) {
+        // 2. 排除所有包含验证码、动态码的短信 (哪怕含有“向某某付款”，也是授权验证过程，严禁计入真实动账)
+        if (text.contains("验证码") || text.contains("动态码") || text.contains("动态口令")) {
             return true;
         }
-        // 3. 排除虚假贷款/套路贷广告
+        // 3. 排除保单承保、订单发货、商品出库等商户凭据/收据类二次通知 (真实扣款已由银行/支付平台流水记录，避免重复翻倍)
+        if (text.contains("已承保") || text.contains("已发货") || text.contains("订单已生成") || text.contains("电子发票")) {
+            return true;
+        }
+        // 4. 排除虚假贷款/套路贷广告
         if (text.contains("预放款") || text.contains("预核准") || text.contains("贷款最高")
                 || text.contains("额度最高") || text.contains("中银E贷") || text.contains("分子借钱") || text.contains("智花")) {
             return true;
         }
-        // 4. 排除信用卡账单还款通知、供款提醒、余额不足催缴 (非真实交易流水)
+        // 5. 排除信用卡账单还款通知、供款提醒、余额不足催缴 (非真实交易流水)
         if (text.contains("当月账单") || text.contains("最低还款额") || text.contains("账单应还款金额")
                 || text.contains("出账日提醒") || text.contains("余额不足") || text.contains("未按时还款")
                 || text.contains("若已存足") || text.contains("补充账户余额")) {
             return true;
         }
-        // 5. 排除防空警报、政务通知、云服务提醒
+        // 6. 排除防空警报、政务通知、云服务提醒
         if (text.contains("防空警报") || text.contains("农业普查") || text.contains("资源包即将到期")) {
             return true;
         }
