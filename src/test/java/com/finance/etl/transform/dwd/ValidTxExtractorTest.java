@@ -8,6 +8,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -61,5 +64,81 @@ class ValidTxExtractorTest {
             assertEquals(false, result.get("is_valid_tx"), "非动账短信必须判定 is_valid_tx=false: " + sample);
             assertNull(result.get("direction"), "非动账短信不应有资金流向");
         }
+    }
+
+    @Test
+    @DisplayName("从 Dev 存储桶读取全部真实的 ODS 短信，批量审计交易有效性与动账类型判定")
+    void testClassifyAllSmsFromDevTable() throws Exception {
+        org.apache.iceberg.flink.TableLoader tableLoader =
+                com.finance.etl.repository.IcebergCatalogFactory.createTableLoader("finance_dev", "raw_sms_records");
+        tableLoader.open();
+        org.apache.iceberg.Table table = tableLoader.loadTable();
+
+        int totalCount = 0;
+        int validCount = 0;
+        int invalidCount = 0;
+        Map<String, Integer> directionCounts = new HashMap<>();
+        Map<String, Integer> txTypeCounts = new HashMap<>();
+        List<String> auditLogs = new ArrayList<>();
+
+        System.out.println("================================================================================");
+        System.out.println("🛡️ [Dev Lakehouse ValidTx Audit] Auditing transaction validity across all ODS records...");
+        System.out.println("================================================================================");
+
+        try (org.apache.iceberg.io.CloseableIterable<org.apache.iceberg.data.Record> records =
+                     org.apache.iceberg.data.IcebergGenerics.read(table).build()) {
+            for (org.apache.iceberg.data.Record r : records) {
+                totalCount++;
+                Long id = r.get(0, Long.class);
+                String msgUid = r.get(1, String.class);
+                String channel = r.get(2, String.class);
+                String sender = r.get(3, String.class);
+                String receiverPhone = r.get(4, String.class);
+                String rawBody = r.get(6, String.class);
+
+                SmsRecord sms = new SmsRecord(id, msgUid, channel, sender, receiverPhone, null, rawBody, null);
+                Map<String, Object> result = extractor.extract(sms);
+
+                Boolean isValid = (Boolean) result.get("is_valid_tx");
+                assertNotNull(isValid, "is_valid_tx 结果不可为 null");
+
+                if (Boolean.TRUE.equals(isValid)) {
+                    validCount++;
+                    String direction = (String) result.get("direction");
+                    String txType = (String) result.get("tx_type");
+
+                    assertNotNull(direction, "有效交易必须包含资金流向 (direction)");
+                    assertNotNull(txType, "有效交易必须包含交易细分类型 (tx_type)");
+
+                    directionCounts.put(direction, directionCounts.getOrDefault(direction, 0) + 1);
+                    txTypeCounts.put(txType, txTypeCounts.getOrDefault(txType, 0) + 1);
+
+                    auditLogs.add(String.format("[VALID #%3d | ID:%3d | %-4s] => %-7s | %-8s | %s",
+                            validCount, id, sender != null ? sender : "N/A", direction, txType,
+                            rawBody != null && rawBody.length() > 60 ? rawBody.substring(0, 60).replace("\n", " ") + "..." : rawBody));
+                } else {
+                    invalidCount++;
+                }
+            }
+        }
+
+        // 打印前 30 条判定为有效的样本
+        for (int i = 0; i < Math.min(30, auditLogs.size()); i++) {
+            System.out.println(auditLogs.get(i));
+        }
+
+        System.out.println("================================================================================");
+        System.out.println("📈 [ValidTx Audit Summary]");
+        System.out.printf("  • 总扫描记录数 (Total ODS)      : %d 封\n", totalCount);
+        System.out.printf("  • 判定为真实动账 (Valid Tx)    : %d 笔 (占总短信比例: %.1f%%)\n",
+                validCount, totalCount > 0 ? (double) validCount * 100 / totalCount : 0);
+        System.out.printf("  • 判定为免动账/通知 (Invalid)   : %d 封 (验证码/广告/服务号/还款提醒)\n", invalidCount);
+        System.out.println("  • 资金方向分布 (Direction)      : " + directionCounts);
+        System.out.println("  • 交易类型分布 (Transaction Type): " + txTypeCounts);
+        System.out.println("================================================================================");
+
+        assertTrue(totalCount > 0, "Dev 表中必须有数据可供审计");
+        assertTrue(validCount > 0, "必须成功判定出至少部分有效动账");
+        assertTrue(invalidCount > 0, "必须成功过滤出无意义的通知与广告短信");
     }
 }

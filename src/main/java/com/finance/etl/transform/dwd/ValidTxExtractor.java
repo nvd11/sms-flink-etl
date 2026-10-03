@@ -104,8 +104,10 @@ public class ValidTxExtractor implements DwdFieldExtractor {
                 || text.contains("额度最高") || text.contains("中银E贷") || text.contains("分子借钱") || text.contains("智花")) {
             return true;
         }
-        // 4. 排除信用卡账单还款通知 (非交易流水)
-        if (text.contains("当月账单") || text.contains("最低还款额") || text.contains("账单应还款金额") || text.contains("出账日提醒")) {
+        // 4. 排除信用卡账单还款通知、供款提醒、余额不足催缴 (非真实交易流水)
+        if (text.contains("当月账单") || text.contains("最低还款额") || text.contains("账单应还款金额")
+                || text.contains("出账日提醒") || text.contains("余额不足") || text.contains("未按时还款")
+                || text.contains("若已存足") || text.contains("补充账户余额")) {
             return true;
         }
         // 5. 排除防空警报、政务通知、云服务提醒
