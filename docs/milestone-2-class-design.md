@@ -12,8 +12,53 @@
 
 M2 的核心是构建**一个具备自主使用工具能力的智能体（Agent）**。系统分为 **模型工厂层、数据访问层、外部适配层、工具武器库层、AI 契约层与智能体本体层** 六大结构：
 
-```mermaid
-classDiagram
+### 1.1 源代码与测试类目录树结构 (Directory Structure)
+
+所有类均严格按单一职责与分层原则存放于 `com.finance.etl.*` 下：
+
+```text
+src
+├── main/java/com/finance/etl/
+│   │
+│   ├── agent/                                    [智能体本体层]
+│   │   └── FinancialAdvisorAgent.java            -- 🎯 智能体核心实体类 (持有工具、模型与服务，提供 fromConfig)
+│   │
+│   ├── service/                                  [声明式 AI 契约层]
+│   │   └── FinancialAdvisorService.java          -- 🎯 LangChain4j 声明式 AI 契约接口 (@SystemMessage)
+│   │
+│   ├── model/                                    [模型工厂层]
+│   │   └── FinancialChatModelFactory.java        -- 生产 ChatLanguageModel (直连 LiteLLM Gemini-3.8-Flash)
+│   │
+│   ├── repository/                               [数据访问 DAO 层]
+│   │   └── FinancialDwsDao.java                  -- 专职 Trino DWS 视图结构化数据访问对象
+│   │
+│   ├── tools/                                    [Agent 专用工具箱 (@Tool)]
+│   │   ├── FinancialLakehouseTools.java          -- 暴露湖仓指标查询能力 (@Tool)
+│   │   └── FinancialChartTools.java              -- 暴露 QuickChart 短链生成能力 (@Tool)
+│   │
+│   └── client/                                   [外部基础设施适配层]
+│       ├── QuickChartClient.java                 -- 专职 POST quickchart.io 生成图片短链
+│       └── SlackYuiClient.java                   -- 专职 Slack Block Kit 富文本私聊投递
+│
+└── test/java/com/finance/etl/
+    │
+    ├── agent/
+    │   └── FinancialAdvisorAgentTest.java        -- 智能体端到端多轮 Tool Calling 集成测试
+    │
+    ├── model/
+    │   └── FinancialChatModelFactoryTest.java    -- 模型工厂与网关连通性单元测试
+    │
+    ├── repository/
+    │   └── FinancialDwsDaoTest.java              -- DWS 视图数据查询与解析单元测试
+    │
+    └── client/
+        ├── QuickChartClientTest.java             -- QuickChart 短链生成集成测试
+        └── SlackYuiClientTest.java               -- Slack 消息投递单元测试
+```
+
+---
+
+### 1.2 架构类图关系 (Class Diagram)
     class FinancialChatModelFactory {
         +fromConfig() ChatLanguageModel
         +create(baseUrl, apiKey, modelName) ChatLanguageModel
