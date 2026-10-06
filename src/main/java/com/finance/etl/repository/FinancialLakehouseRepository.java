@@ -129,6 +129,98 @@ public class FinancialLakehouseRepository implements AutoCloseable {
     }
 
     /**
+     * 1.1 查询指定自然日大盘
+     */
+    public DwsSummaryRecord queryDailySummary(LocalDate date) {
+        Objects.requireNonNull(date, "date must not be null");
+        String sql = String.format("""
+                SELECT
+                    stat_date, min_id, max_id, tx_count,
+                    total_expense, total_refund, net_expense, total_income, total_transfer,
+                    food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
+                    medical_expense, communication_expense, insurance_expense, property_expense,
+                    travel_expense, personal_transfer_expense, other_expense,
+                    max_single_amount
+                FROM iceberg.%s.dws_financial_summary_daily
+                WHERE stat_date = DATE '%s'
+                LIMIT 1
+                """, this.schema, date);
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            if (rs.next()) {
+                return mapDwsSummaryRecord("DAILY", rs.getDate("stat_date").toString(), rs);
+            }
+            return null;
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query daily summary for {}: {}", date, e.getMessage(), e);
+            throw new RuntimeException("Failed to query daily summary from Trino", e);
+        }
+    }
+
+    /**
+     * 1.2 查询指定月度大盘
+     */
+    public DwsSummaryRecord queryMonthlySummary(String month) {
+        Objects.requireNonNull(month, "month must not be null");
+        String sql = String.format("""
+                SELECT
+                    stat_month, min_id, max_id, tx_count,
+                    total_expense, total_refund, net_expense, total_income, total_transfer,
+                    food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
+                    medical_expense, communication_expense, insurance_expense, property_expense,
+                    travel_expense, personal_transfer_expense, other_expense,
+                    max_single_amount
+                FROM iceberg.%s.dws_financial_summary_monthly
+                WHERE stat_month = '%s'
+                LIMIT 1
+                """, this.schema, month);
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            if (rs.next()) {
+                return mapDwsSummaryRecord("MONTHLY", rs.getString("stat_month"), rs);
+            }
+            return null;
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query monthly summary for {}: {}", month, e.getMessage(), e);
+            throw new RuntimeException("Failed to query monthly summary from Trino", e);
+        }
+    }
+
+    private DwsSummaryRecord mapDwsSummaryRecord(String periodType, String periodVal, ResultSet rs) throws SQLException {
+        DwsSummaryRecord record = new DwsSummaryRecord();
+        record.setPeriodType(periodType);
+        record.setPeriodValue(periodVal);
+        record.setTxCount(rs.getLong("tx_count"));
+        record.setTotalExpense(rs.getBigDecimal("total_expense"));
+        record.setTotalRefund(rs.getBigDecimal("total_refund"));
+        record.setNetExpense(rs.getBigDecimal("net_expense"));
+        record.setTotalIncome(rs.getBigDecimal("total_income"));
+        record.setTotalTransfer(rs.getBigDecimal("total_transfer"));
+        record.setMaxSingleAmount(rs.getBigDecimal("max_single_amount"));
+
+        record.setMinId(rs.getLong("min_id"));
+        record.setMaxId(rs.getLong("max_id"));
+        record.setFoodExpense(rs.getBigDecimal("food_expense"));
+        record.setTransportExpense(rs.getBigDecimal("transport_expense"));
+        record.setOnlineShoppingExpense(rs.getBigDecimal("online_shopping_expense"));
+        record.setOfflineShoppingExpense(rs.getBigDecimal("offline_shopping_expense"));
+        record.setMedicalExpense(rs.getBigDecimal("medical_expense"));
+        record.setCommunicationExpense(rs.getBigDecimal("communication_expense"));
+        record.setInsuranceExpense(rs.getBigDecimal("insurance_expense"));
+        record.setPropertyExpense(rs.getBigDecimal("property_expense"));
+        record.setTravelExpense(rs.getBigDecimal("travel_expense"));
+        record.setPersonalTransferExpense(rs.getBigDecimal("personal_transfer_expense"));
+        record.setOtherExpense(rs.getBigDecimal("other_expense"));
+        return record;
+    }
+
+    /**
      * 2. 查询指定自然日周期内的全量 DWD 动账交易明细流水
      *
      * @param date 统计日期
@@ -187,7 +279,62 @@ public class FinancialLakehouseRepository implements AutoCloseable {
     }
 
     /**
-     * 2.1 向后兼容：查询指定自然日按金额降序排序的 Top N 真实消费大额明细案例
+     * 2.1 查询指定月份周期内的全量 DWD 动账交易明细流水
+     */
+    public List<FinancialTransaction> queryMonthlyTransactions(String month) {
+        Objects.requireNonNull(month, "month must not be null");
+
+        String sql = String.format("""
+                SELECT id, raw_record_id, tx_time, amount, currency, direction, tx_type,
+                       institution, account_type, card_tail, payment_channel,
+                       counterparty, cleaned_merchant, category, is_valid_tx, etl_created_at
+                FROM iceberg.%s.dwd_financial_transactions
+                WHERE format_datetime(tx_time, 'yyyy-MM') = '%s'
+                  AND is_valid_tx = true
+                ORDER BY tx_time ASC
+                """, this.schema, month);
+
+        LOG.info("🔍 [Lakehouse Repo] Querying all DWD transactions for month {} from iceberg.{}.dwd_financial_transactions...",
+                month, this.schema);
+
+        List<FinancialTransaction> list = new ArrayList<>();
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            while (rs.next()) {
+                FinancialTransaction tx = new FinancialTransaction();
+                tx.setId(rs.getLong("id"));
+                tx.setRawRecordId(rs.getLong("raw_record_id"));
+                Timestamp ts = rs.getTimestamp("tx_time");
+                if (ts != null) {
+                    tx.setTxTime(ts.toInstant());
+                }
+                tx.setAmount(rs.getBigDecimal("amount"));
+                tx.setCurrency(rs.getString("currency"));
+                tx.setDirection(rs.getString("direction"));
+                tx.setTxType(rs.getString("tx_type"));
+                tx.setInstitution(rs.getString("institution"));
+                tx.setAccountType(rs.getString("account_type"));
+                tx.setCardTail(rs.getString("card_tail"));
+                tx.setPaymentChannel(rs.getString("payment_channel"));
+                tx.setCounterparty(rs.getString("counterparty"));
+                tx.setCleanedMerchant(rs.getString("cleaned_merchant"));
+                tx.setCategory(rs.getString("category"));
+                tx.setIsValidTx(rs.getBoolean("is_valid_tx"));
+                list.add(tx);
+            }
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query all transactions for month {}: {}", month, e.getMessage(), e);
+            throw new RuntimeException("Failed to query monthly transactions from Trino", e);
+        }
+
+        LOG.info("✅ [Lakehouse Repo] Retrieved {} raw transactions for month {}", list.size(), month);
+        return list;
+    }
+
+    /**
+     * 2.2 向后兼容：查询指定自然日按金额降序排序的 Top N 真实消费大额明细案例
      *
      * @param date  统计日期
      * @param limit 返回条数上限 (如 3 或 5)
