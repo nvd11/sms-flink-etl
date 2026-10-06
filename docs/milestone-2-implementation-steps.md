@@ -21,27 +21,29 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
    * 网关地址：`https://gw.jppwl.asia/litellm/v1` (通过 Starfive 千兆代理加速)；
    * 模型名称：**`gemini-3.8-flash`**；
    * 凭证绑定：Yui 专属虚拟 Key (`sk-WhW6BWdwKN_LITjCuAmgiA`)；
-3. **数据访问层 (DAO)**：`FinancialDwsDao`，直连 Trino REST API 提取结构化指标；
+3. **数据输入层 (Flink 双流)**：统一由 Trino 网关提供宏观 DWS 视图流与微观 DWD Top 10 大额明细流；
 4. **图表短链生成**：`QuickChartClient`，通过 `POST https://quickchart.io/chart/create` 交换标准短链。
 
 ---
 
 ## 2. 详细实施步骤 (Step-by-Step)
 
-整个 M2 划分为 **5 个循序渐进的交付步骤**，步步有断言、步步有验证：
+整个 M2 划分为 **7 个循序渐进的交付步骤**，步步有断言、步步有验证：
 
 ```text
 [Step 2.1: 引入 Maven 依赖] 
              ⬇
 [Step 2.2: 编写模型工厂 FinancialChatModelFactory] 
              ⬇
-[Step 2.3: 编写数据访问 DAO FinancialDwsDao] 
+[Step 2.3: 编写图表基础设施 QuickChartClient 与 FinancialChartTools] 
              ⬇
-[Step 2.4: 编写大模型专属武器库 @Tool (Lakehouse & Chart)] 
+[Step 2.4: 编写上下文模型 DwsSummaryRecord、FinancialReportContext 与 AI 契约 FinancialAdvisorService] 
              ⬇
-[Step 2.5: 编写声明式服务 FinancialAdvisorService 与智能体本体 FinancialAdvisorAgent]
+[Step 2.5: 编写智能体本体 FinancialAdvisorAgent 与推送客户端 SlackYuiClient]
              ⬇
-[Step 2.6: 编写端到端单元测试与实盘生成验证]
+[Step 2.6: 编写 Flink 双流广播汇聚算子 FinancialReportBroadcastProcessFunction (P=1)]
+             ⬇
+[Step 2.7: 编写 Flink 统一批作业 FinancialReporterJob 与全链路端到端验收]
 ```
 
 ---
@@ -71,26 +73,28 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 
 ---
 
-### 步骤 2.3：编写 DWS 湖仓数据访问 DAO (`repository/FinancialDwsDao.java`)
-* **职责**：专职负责向 Trino 发起轻量查询，从 M1 的视图中拉取结构化财务指标。
-* **核心方法定义**：
-  1. `queryDailySummary(LocalDate date)`: 从 `dws_financial_summary_daily` 读取单日净开销与五大类目切片；
-  2. `queryWeeklySummary(int year, int week)`: 从 `dws_financial_summary_weekly` 读取周开销、周末 vs 工作日比例与 `max_id`；
-  3. `queryMonthlySummary(String month)`: 从 `dws_financial_summary_monthly` 读取全月大盘、还款与理赔；
-  4. `queryTopMerchants(String month, int limit)`: 从 `dws_merchant_spending_ranking` 提取消费前 N 名商户排行榜；
-* **测试验证**：直连 Trino 查询真实 9 月份数据，断言返回的 `net_expense` 必须为 `￥22,679.46`。
+### 步骤 2.3：配置 Flink 统一 Trino 双流数据源 (Trino Dual JdbcSource)
+* **核心思路**：彻底弃用“算子内通过 DAO 查数”的破绽反模式，同时避免直接读取底层 Iceberg S3A 裸文件的繁重依赖，统一由 Trino 网关提供双流输入并进行排序下推：
+  1. **宏观指标流 (`JdbcSource<DwsSummaryRecord>`)**：
+     * 通过 Flink 原生 JDBC Connector 连接 Trino (`io.trino.jdbc.TrinoDriver`)；
+     * 读取 `dws_financial_summary_*` 视图，以流式发射精准平账的周期大盘行（包含净支出、还款、理赔、分类汇总、max_id）；
+  2. **微观代表性交易流 (`JdbcSource<FinancialTransaction>`) 与 Flink Batch 分级聚合策略**：
+     * **日度轻播报 (Daily)**：采用 **全局 Top 3~5 策略**，直接由 Trino 下推 `WHERE date(tx_time) = :date ORDER BY amount DESC LIMIT 3`，聚焦全天核心大单；
+     * **周复盘 / 月度白皮书 (Weekly / Monthly)**：采用 **按分类 Top 1 代表作策略 (Top-N per Category)**，在 Flink 算子内通过优先队列（小顶堆）或 Trino 窗口函数 `ROW_NUMBER() OVER (PARTITION BY category ORDER BY amount DESC) <= 1` 下推获取各核心分类的最具代表性动账，确保打车、外卖、商超、医疗各维度均有鲜活案例，杜绝单一巨额支出掩盖其他维度的失语现象；
+     * 毫秒级直接产出最具代表性的结构化明细，避免全量流水传输，将 Prompt Token 严格收敛在数百以内。
 
 ---
 
-### 步骤 2.4：构建 Agent 工具箱 (`tools/` · @Tool 声明)
-将底层 DAO 与 QuickChart 能力，包装为大模型可自主决断调用的声明式函数：
-1. **`FinancialLakehouseTools.java`**：
-   * `@Tool("查询指定周期的消费大盘指标(总支出、退款、净开销、各分类金额)")`
-   * `@Tool("查询当月消费最高的核心商户排行榜")`
-2. **`FinancialChartTools.java`**：
-   * `@Tool("根据给定的类目与金额生成环形饼图高清短链")`
-   * `@Tool("根据商户排行榜生成横向柱状图高清短链")`
-   * 底层封装 `QuickChartClient` 走 `POST` 短链交换，彻底防范裂图。
+### 步骤 2.4：构建图表短链工具与全局单例广播汇聚算子
+1. **图表短链生成客户端与工具 (`client/QuickChartClient.java` & `tools/FinancialChartTools.java`)**：
+   * 封装 QuickChart 的官方 `POST https://quickchart.io/chart/create` 短链换取，杜绝中文 GET 编码截断与 Slack 卡片裂图；
+   * 向 AI Agent 暴露 `@Tool` 方法：`createCategoryPieChart` 与 `createMerchantBarChart`；
+   * *(注：因双流已全量喂入宏观与微观数据，无需再向 Agent 暴露湖仓查数 Tool，避免模型盲目查数与幻觉)*。
+2. **双流广播汇聚算子 (`com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction`)**：
+   * 继承 Flink `BroadcastProcessFunction`，**显式声明 `.setParallelism(1)` 全局单例执行**；
+   * **广播端 (`processBroadcastElement`)**：接收 DWS 宏观大盘统计行并存入广播状态；
+   * **数据流端 (`processElement`)**：流式接收微观 Top 10 真实交易案例；
+   * **批结束触发器**：组装包含宏观数字与微观案例的完整 `FinancialReportContext`，投喂给 AI 智能体生成报告。
 
 ---
 
@@ -98,22 +102,23 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 1. **声明式服务接口 (`service/FinancialAdvisorService.java`)**：
    * 使用 LangChain4j 的 `@SystemMessage` 固化 Yui 专属人设：
      * *“你是主人 Jason 的专属贴身财务秘书与特许金融分析师 Yui……”*
-     * *“【铁律】：严禁捏造金额，必须基于工具返回的数据。大额还款作为资产划转对待……”*
-   * 定义 `@UserMessage` 业务方法，自动完成 Prompt 变量替换。
+     * *“【铁律】：严禁捏造金额，必须基于输入的宏观指标与微观明细进行分析……”*
+     * *“必须主动调用绘图工具生成分类饼图与商户柱状图短链……”*
+   * 定义 `@UserMessage` 业务方法，自动完成 Prompt 上下文变量注入。
 2. **智能体实体类 (`agent/FinancialAdvisorAgent.java`)**：
-   * 内置 `fromConfig()` 静态工厂方法，自动装配 Model、Tools 与 Agent 代理；
+   * 内置 `fromConfig()` 静态工厂方法，自动装配 Model 与 `FinancialChartTools`；
    * 对外暴露高内聚行为：
-     * `String generateDailyReview(LocalDate date)`
-     * `String generateWeeklyReview(int year, int week)`
-     * `String generateMonthlyReview(String month)`
+     * `String generateReport(FinancialReportContext context)`
+3. **Slack 投递客户端 (`client/SlackYuiClient.java`)**：
+   * 使用 Bot Token 直连 Slack Web API，组装 Block Kit 富文本卡片推送到主人频道 (`U0AM8G9AARF`)。
 
 ---
 
 ### 步骤 2.6：端到端集成测试与实盘报告验收 (`FinancialAdvisorAgentTest.java`)
 * **核心用例**：
-  * **用例 1 (工具自动调用与决策验证)**：给 Agent 传入指令：“帮我分析 2026 年 9 月的全月财务大盘”，断言大模型自主触发了 `queryMonthlySummary` 和 `createCategoryPieChart` 两次工具调用；
-  * **用例 2 (金额真实性与无幻觉对账)**：断言 Agent 生成的文本中，必须准确包含 `22679.46`（净支出）和 `2790.59`（理赔款）；
-  * **用例 3 (图表短链有效性)**：断言生成的报告中包含合法的 QuickChart 图片短链。
+  * **用例 1 (双流上下文驱动报告生成)**：给 Agent 传入封装好 9 月宏观指标与微观明细的 `FinancialReportContext`，验证大模型自主调用 `createCategoryPieChart` 与 `createMerchantBarChart` 生成短链；
+  * **用例 2 (金额真实性与平账验证)**：断言 Agent 生成的研报中，净支出（`22679.46`）、理赔（`2790.59`）与明细案例金额完全严丝合缝；
+  * **用例 3 (Slack 卡片交付验收)**：断言生成的 Block Kit 卡片可成功投递且图片短链渲染正常。
 
 ---
 
@@ -122,13 +127,14 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 | 类全限定名 | 职责类型 | 依赖组件 | 核心考量 |
 | :--- | :--- | :--- | :--- |
 | `com.finance.etl.model.FinancialChatModelFactory` | 模型工厂 | LangChain4j OpenAi | 统一注入 LiteLLM 与 Gemini 3.8 Flash |
-| `com.finance.etl.repository.FinancialDwsDao` | 数据访问 DAO | Trino REST / HTTP | 负责执行 DWS 视图 SQL 查询 |
+| `com.finance.etl.model.FinancialReportContext` | 领域模型 | Lombok / POJO | 承载双流汇聚后的宏观指标与微观明细 |
 | `com.finance.etl.client.QuickChartClient` | 外部服务客户端 | JDK 21 HttpClient | 负责 POST 交换图表短链 |
-| `com.finance.etl.tools.FinancialLakehouseTools` | Agent 武器库 | `FinancialDwsDao` | 暴露查数能力 (`@Tool`) |
+| `com.finance.etl.client.SlackYuiClient` | 外部服务客户端 | JDK 21 HttpClient | 负责向主人 Slack 推送 Block Kit 卡片 |
 | `com.finance.etl.tools.FinancialChartTools` | Agent 武器库 | `QuickChartClient` | 暴露画图能力 (`@Tool`) |
 | `com.finance.etl.service.FinancialAdvisorService` | 声明式 AI 契约 | LangChain4j 注解 | 锁定 Yui 秘书人设与零幻觉红线 |
 | `com.finance.etl.agent.FinancialAdvisorAgent` | 智能体实体本体 | `AiServices` | 提供 `fromConfig()` 与一键分析接口 |
-| `com.finance.etl.agent.FinancialAdvisorAgentTest` | 自动化集成测试 | JUnit 5 | 验证全链路真实跑通与指标精确平账 |
+| `com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction` | Flink 算子 | Flink Streaming API | 负责双流广播汇聚与上下文打包 |
+| `com.finance.etl.jobs.FinancialReporterJob` | Flink 批作业 | Flink Batch Pipeline | 统一入口，挂载双流并执行端到端闭环 |
 
 ---
 

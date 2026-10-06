@@ -14,17 +14,18 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <java.version>17</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>21</java.version>
 
         <!-- 核心生态组件版本 -->
-        <flink.version>1.19.1</flink.version>
-        <iceberg.version>1.6.1</iceberg.version>
+        <flink.version>1.20.0</flink.version>
+        <iceberg.version>1.7.0</iceberg.version>
         <hadoop.version>3.3.6</hadoop.version>
         <aws.sdk.version>1.12.367</aws.sdk.version>
         <postgresql.driver.version>42.7.3</postgresql.driver.version>
         <jakarta.mail.version>2.0.1</jakarta.mail.version>
+        <langchain4j.version>0.35.0</langchain4j.version>
         <slf4j.version>2.0.13</slf4j.version>
         <log4j.version>2.23.1</log4j.version>
         <main.class>com.finance.etl.jobs.JobLauncher</main.class>
@@ -63,10 +64,10 @@
             <version>${flink.version}</version>
         </dependency>
 
-        <!-- 2. Apache Iceberg Flink Runtime (支持 Flink 1.19) -->
+        <!-- 2. Apache Iceberg Flink Runtime (支持 Flink 1.20) -->
         <dependency>
             <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-flink-runtime-1.19</artifactId>
+            <artifactId>iceberg-flink-runtime-1.20</artifactId>
             <version>${iceberg.version}</version>
         </dependency>
 
@@ -116,6 +117,26 @@
             <groupId>com.sun.mail</groupId>
             <artifactId>jakarta.mail</artifactId>
             <version>${jakarta.mail.version}</version>
+        </dependency>
+
+        <!-- 6. LangChain4j 大模型智能体框架 (核心包 + OpenAI 协议兼容包，直连 LiteLLM / Gemini) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- 7. Trino JDBC Driver (用于连接湖仓 Trino 视图与下推查询) -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-jdbc</artifactId>
+            <version>468</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- 6. 日志框架 SLF4J + Log4j2 -->

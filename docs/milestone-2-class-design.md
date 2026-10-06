@@ -26,14 +26,15 @@ src
 │   ├── service/                                  [声明式 AI 契约层]
 │   │   └── FinancialAdvisorService.java          -- 🎯 LangChain4j 声明式 AI 契约接口 (@SystemMessage)
 │   │
-│   ├── model/                                    [模型工厂层]
-│   │   └── FinancialChatModelFactory.java        -- 生产 ChatLanguageModel (直连 LiteLLM Gemini-3.8-Flash)
+│   ├── model/                                    [领域与模型工厂层]
+│   │   ├── FinancialChatModelFactory.java        -- 生产 ChatLanguageModel (直连 LiteLLM Gemini-3.8-Flash)
+│   │   ├── FinancialReportContext.java           -- 双流汇聚后的结构化财务报表上下文
+│   │   └── DwsSummaryRecord.java                 -- Trino JdbcSource 抽取的宏观聚合实体
 │   │
-│   ├── repository/                               [数据访问 DAO 层]
-│   │   └── FinancialDwsDao.java                  -- 专职 Trino DWS 视图结构化数据访问对象
+│   ├── transform/report/                         [Flink 双流汇聚转换算子]
+│   │   └── FinancialReportBroadcastProcessFunction.java -- 双流广播汇聚算子 (DWS宏观流 + DWD微观流)
 │   │
-│   ├── tools/                                    [Agent 专用工具箱 (@Tool)]
-│   │   ├── FinancialLakehouseTools.java          -- 暴露湖仓指标查询能力 (@Tool)
+│   ├── tools/                                    [Agent 专用绘图工具箱 (@Tool)]
 │   │   └── FinancialChartTools.java              -- 暴露 QuickChart 短链生成能力 (@Tool)
 │   │
 │   └── client/                                   [外部基础设施适配层]
@@ -43,13 +44,13 @@ src
 └── test/java/com/finance/etl/
     │
     ├── agent/
-    │   └── FinancialAdvisorAgentTest.java        -- 智能体端到端多轮 Tool Calling 集成测试
+    │   └── FinancialAdvisorAgentTest.java        -- 智能体双流上下文驱动报告生成集成测试
     │
     ├── model/
     │   └── FinancialChatModelFactoryTest.java    -- 模型工厂与网关连通性单元测试
     │
-    ├── repository/
-    │   └── FinancialDwsDaoTest.java              -- DWS 视图数据查询与解析单元测试
+    ├── transform/report/
+    │   └── FinancialReportBroadcastProcessFunctionTest.java -- 双流广播汇聚算子单元测试
     │
     └── client/
         ├── QuickChartClientTest.java             -- QuickChart 短链生成集成测试
@@ -59,72 +60,66 @@ src
 ---
 
 ### 1.2 架构类图关系 (Class Diagram)
+```mermaid
+classDiagram
     class FinancialChatModelFactory {
         +fromConfig() ChatLanguageModel
         +create(baseUrl, apiKey, modelName) ChatLanguageModel
     }
 
-    class FinancialDwsDao {
-        -String trinoUrl
-        -String trinoUser
-        -HttpClient httpClient
-        +fromConfig() FinancialDwsDao
-        +queryDailySummary(LocalDate) String
-        +queryWeeklySummary(int, int) String
-        +queryMonthlySummary(String) String
-        +queryTopMerchants(String, int) String
+    class FinancialReportContext {
+        -String periodType
+        -String periodValue
+        -DwsSummaryRecord macroSummary
+        -List~FinancialTransaction~ topTransactions
+        +toPromptContext() String
     }
 
     class QuickChartClient {
         -HttpClient httpClient
         +fromConfig() QuickChartClient
-        +createDoughnutChart(String title, String labelsJson, String dataJson) String
-        +createHorizontalBarChart(String title, String labelsJson, String dataJson) String
+        +createDoughnutChart(String title, List~String~ labels, List~BigDecimal~ values) String
+        +createHorizontalBarChart(String title, List~String~ labels, List~BigDecimal~ values) String
     }
 
     class SlackYuiClient {
         -String botToken
         -String defaultChannel
         +fromConfig() SlackYuiClient
-        +postBlockMessage(String channel, String fallbackText, List~Object~ blocks) boolean
-    }
-
-    class FinancialLakehouseTools {
-        -FinancialDwsDao dwsDao
-        +fromConfig() FinancialLakehouseTools
-        +queryPeriodSummary(String periodType, String periodValue) String
-        +queryTopMerchants(String month, int limit) String
+        +postBlockMessage(String channel, String fallbackText, String blocksJson) boolean
     }
 
     class FinancialChartTools {
         -QuickChartClient chartClient
         +fromConfig() FinancialChartTools
-        +createCategoryPieChart(String title, String labels, String data) String
-        +createMerchantBarChart(String title, String labels, String data) String
+        +createCategoryPieChart(String title, String categories, String amounts) String
+        +createMerchantBarChart(String title, String merchants, String amounts) String
     }
 
     class FinancialAdvisorService {
         <<interface>>
-        +analyzeFinancialStatus(String instruction) String
+        +generateReport(String contextData) String
     }
 
     class FinancialAdvisorAgent {
         -FinancialAdvisorService aiService
-        -SlackYuiClient slackClient
         +fromConfig() FinancialAdvisorAgent
-        +generateDailyReview(LocalDate date) String
-        +generateWeeklyReview(int year, int week) String
-        +generateMonthlyReview(String month) String
-        +sendToSlack(String reportMarkdown) boolean
+        +generateReport(FinancialReportContext context) String
+    }
+
+    class FinancialReportBroadcastProcessFunction {
+        -MapStateDescriptor macroStateDescriptor
+        -List~FinancialTransaction~ microBuffer
+        +processElement(FinancialTransaction, ReadOnlyContext, Collector) void
+        +processBroadcastElement(DwsSummaryRecord, Context, Collector) void
     }
 
     FinancialAdvisorAgent --> FinancialAdvisorService : 持有并调用
-    FinancialAdvisorAgent --> SlackYuiClient : 消息投递
     FinancialAdvisorService ..> FinancialChatModelFactory : 模型驱动 (AiServices)
-    FinancialAdvisorService ..> FinancialLakehouseTools : 声明式工具回调
-    FinancialAdvisorService ..> FinancialChartTools : 声明式工具回调
-    FinancialLakehouseTools --> FinancialDwsDao : 执行 SQL 查湖仓
+    FinancialAdvisorService ..> FinancialChartTools : 声明式绘图工具
     FinancialChartTools --> QuickChartClient : 生成短链
+    FinancialReportBroadcastProcessFunction --> FinancialAdvisorAgent : 组装 Context 后驱动生成研报
+    FinancialReportBroadcastProcessFunction --> SlackYuiClient : 消息投递
 ```
 
 ---
@@ -149,19 +144,24 @@ src
 
 ---
 
-### 2.2 数据访问 DAO 类：`com.finance.etl.repository.FinancialDwsDao`
-* **包路径**：`com.finance.etl.repository`
-* **职责**：专职通过轻量 HTTP / REST API 直连 Trino，负责向 M1 建好的 `dws_financial_summary_*` 视图发起结构化查询，屏蔽 SQL 细节。
-* **方法签名**：
-  ```java
-  public class FinancialDwsDao implements AutoCloseable {
-      public static FinancialDwsDao fromConfig();
-      
-      // 1. 查询单日聚合指标 (包含 min_id, max_id, 净支出, 分类开销)
-      public String queryDailySummary(LocalDate date);
-      
-      // 2. 查询周度自然周聚合指标 (包含 week_period, 日均, 周末 vs 工作日, max_id)
-      public String queryWeeklySummary(int year, int week);
+### 2.2 宏观与微观 Trino 数据源提取规约
+* **宏观指标提取 (`macroSummaryStream`)**：
+  - 通过 Trino JDBC 直连执行 `SELECT * FROM iceberg.finance.dws_financial_summary_*`；
+  - 映射为 `DwsSummaryRecord` 实体（包含净支出、还款、理赔、各大分类金额、max_id）。
+* **微观大额案例提取 (`microDetailStream`)**：
+  - 通过 Trino JDBC 直连执行：
+    ```sql
+    SELECT id, tx_time, tx_type, amount_cny, merchant_clean_name, category_first, counterparty_raw
+    FROM iceberg.finance.dwd_financial_transactions
+    WHERE is_valid_tx = true 
+      AND tx_type = 'EXPENSE'
+      AND date_format(tx_time, '%Y-%m') = :statMonth
+    ORDER BY amount_cny DESC 
+    LIMIT 10;
+    ```
+  - 利用 SQL 下推直接返回 Top 10 大额交易，映射为 `List<FinancialTransaction>`。
+
+---
       
       // 3. 查询月度大盘指标 (包含 stat_month, 净支出, 还款划转, 理赔到账)
       public String queryMonthlySummary(String month);
@@ -206,35 +206,42 @@ src
 
 ---
 
-### 2.5 湖仓工具集：`com.finance.etl.tools.FinancialLakehouseTools`
-* **包路径**：`com.finance.etl.tools`
-* **职责**：LangChain4j 工具箱。持有 `FinancialDwsDao`，使用 `@Tool` 和 `@P` 向大模型声明湖仓查数能力。
-* **方法声明**：
+### 2.5 双流上下文模型：`com.finance.etl.model.FinancialReportContext`
+* **包路径**：`com.finance.etl.model`
+* **职责**：作为 Flink 内部双流汇聚后的统一载体，承载 Trino JDBC 广播流提取的宏观汇总指标与 DWD 微观明细流提炼的 Top 大额交易。
+* **数据结构设计**：
   ```java
-  public class FinancialLakehouseTools {
-      private final FinancialDwsDao dwsDao;
+  public class FinancialReportContext {
+      private String periodType;                       // DAILY, WEEKLY, MONTHLY
+      private String periodValue;                      // e.g., 2026-09
+      private DwsSummaryRecord macroSummary;           // 宏观平账指标 (净支出, 还款, 理赔, 各大分类金额)
+      private List<FinancialTransaction> topTransactions; // 微观动账案例 Top N (商户, 金额, 交易时间, 分类)
       
-      public static FinancialLakehouseTools fromConfig();
-
-      @Tool("从数据湖仓中查询指定周期的消费指标(总支出、退款、净支出、各分类金额)")
-      public String queryPeriodSummary(
-          @P("周期类型: DAILY (日), WEEKLY (周), MONTHLY (月)") String periodType,
-          @P("周期标识: 如日 2026-10-03, 周 2026-W40, 月 2026-09") String periodValue
-      );
-
-      @Tool("查询当月消费最高的核心商户排行榜")
-      public String queryTopMerchants(
-          @P("月份，格式 YYYY-MM，如 2026-09") String month,
-          @P("返回前几名商户，如 5 或 10") int limit
-      );
+      public String toPromptContext();                 // 序列化为结构化 Prompt 注入文本
   }
   ```
 
 ---
 
-### 2.6 图表工具集：`com.finance.etl.tools.FinancialChartTools`
+### 2.6 双流广播汇聚算子：`com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction`
+* **包路径**：`com.finance.etl.transform.report`
+* **职责**：Flink 批处理核心汇聚算子，继承 `BroadcastProcessFunction`。
+* **工作流机制**：
+  1. `processBroadcastElement(DwsSummaryRecord, Context, Collector)`：
+     - 接收 Trino JdbcSource 产出的 1 行宏观大盘统计，存入 `BroadcastState`；
+   2. `processElement(FinancialTransaction, ReadOnlyContext, Collector)`：
+      - 流式接收周期内的 DWD 交易明细，根据多态周期配置维护微观代表性案例：
+        * **Daily 模式**：通过单一大顶堆维护全天消费金额最高的 **Global Top 3 案例**；
+        * **Weekly / Monthly 模式**：通过 `Map<String, FinancialTransaction> categoryTopMap` 维护**每个消费大类各自的最大笔消费代表作 (Top 1 per Category)**，确保交通打车、餐饮、生鲜、网购等各维度均有鲜活论据，杜绝单笔大额保费垄断全部案例的缺陷；
+  3. Flink Batch 批结束触发：
+     - 组装 `FinancialReportContext`，调用 `FinancialAdvisorAgent.generateReport(context)`；
+     - 将生成好的 Markdown / 结构化报表数据发射给下游（IcebergSink 与 Slack 投递）。
+
+---
+
+### 2.7 图表工具集：`com.finance.etl.tools.FinancialChartTools`
 * **包路径**：`com.finance.etl.tools`
-* **职责**：LangChain4j 工具箱。持有 `QuickChartClient`，使用 `@Tool` 和 `@P` 向大模型声明图表绘制能力。
+* **职责**：LangChain4j 专属绘图工具箱。持有 `QuickChartClient`，使用 `@Tool` 和 `@P` 向大模型声明图表绘制能力。
 * **方法声明**：
   ```java
   public class FinancialChartTools {
@@ -251,7 +258,7 @@ src
 
       @Tool("根据给定的商户排行榜数据生成横向柱状图图片短链")
       public String createMerchantBarChart(
-          @P("图表标题，如: 9月核心商户支出Top 6") String title,
+          @P("图表标题，如: 9月核心商户支出Top 5") String title,
           @P("逗号分隔的商户名称列表，如: 美团,盒马,高德打车") String merchants,
           @P("逗号分隔的消费金额列表，如: 9004,926,650") String amounts
       );
@@ -260,7 +267,7 @@ src
 
 ---
 
-### 2.7 声明式 AI 契约接口：`com.finance.etl.service.FinancialAdvisorService`
+### 2.8 声明式 AI 契约接口：`com.finance.etl.service.FinancialAdvisorService`
 * **包路径**：`com.finance.etl.service`
 * **职责**：声明式 AI 接口规范，由 LangChain4j 的 `AiServices.builder()` 自动动态代理生成实现类。
 * **注解与接口定义**：
@@ -268,14 +275,14 @@ src
   public interface FinancialAdvisorService {
       @SystemMessage("""
           你是主人 Jason 的专属贴身财务秘书与高级特许金融分析师 (CFA) Yui。
-          你必须自主判断并使用工具查询真实财务湖仓数据与绘制图表，为主人提供严谨且温存的分析。
+          你将基于输入的宏观财务大盘指标与微观明细案例，为主人提供严谨且温存的分析。
           【硬性红线】：
-          1. 绝不虚构数字！所有金额、笔数必须以工具返回的真实数据为准。
+          1. 绝不虚构数字！所有金额、分类必须以输入的宏观指标为准，明细案例以微观列表为准。
           2. 将信用卡大额还款作为资产流动性划转对待，严禁列入日常消费。
-          3. 如果是周报或月报，必须主动调用绘图工具生成图表链接！
+          3. 如果是周报或月报，必须主动调用绘图工具生成分类饼图或商户柱状图短链！
           4. 语气体贴、温存且专业，给出有实操意义的财务节律与预算优化建议。
           """)
-      String analyzeFinancialStatus(@UserMessage String instruction);
+      String generateReport(@UserMessage String reportContextPrompt);
   }
   ```
 
@@ -318,41 +325,41 @@ src
 
 ---
 
-## 3. 时序调用与 Tool Calling 交互流 (Interaction Sequence)
+## 3. 双流广播交互与研报生成时序 (Interaction Sequence)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as 主人 / 定时调度
+    actor Scheduler as Flink Batch 调度
+    participant DwsSrc as Flink JdbcSource (宏观流)
+    participant DwdSrc as Flink JdbcSource (微观流)
+    participant CoFunc as FinancialReportBroadcastProcessFunction (P=1)
     participant Agent as FinancialAdvisorAgent
     participant AiService as FinancialAdvisorService (Proxy)
     participant Model as Gemini-3.8-Flash (LiteLLM)
-    participant LakeTool as FinancialLakehouseTools
-    participant Dao as FinancialDwsDao
     participant ChartTool as FinancialChartTools
     participant QuickChart as QuickChartClient
     participant Slack as SlackYuiClient
 
-    User ->> Agent: generateMonthlyReview("2026-09")
-    Agent ->> AiService: analyzeFinancialStatus("请分析2026-09月度财务并画图")
-    AiService ->> Model: 发送 SystemPrompt + UserMessage + ToolsSchema
-    Model -->> AiService: 返回 ToolExecutionRequest (queryPeriodSummary)
-    AiService ->> LakeTool: 执行 queryPeriodSummary("MONTHLY", "2026-09")
-    LakeTool ->> Dao: queryMonthlySummary("2026-09")
-    Dao -->> LakeTool: 返回 9月指标 JSON
-    LakeTool -->> AiService: 返回指标结果
-    AiService ->> Model: 回传 ToolExecutionResult
+    Scheduler ->> DwsSrc: 提取 DWS 宏观汇总 (1行平账大盘)
+    Scheduler ->> DwdSrc: 排序下推提取 DWD 微观明细 (Top 10大额案例)
+    DwsSrc -->> CoFunc: broadcast(macroSummary) 写入广播状态
+    DwdSrc -->> CoFunc: processElement(microTx) 流式收集 Top 明细
+    Note over CoFunc: 双流数据收拢完毕，批处理结束触发
+    CoFunc ->> Agent: generateReport(FinancialReportContext)
+    Agent ->> AiService: generateReport(ContextPrompt: 宏观指标 + 微观案例)
+    AiService ->> Model: 灌入全量上下文 + SystemPrompt + ChartToolsSchema
     Model -->> AiService: 返回 ToolExecutionRequest (createCategoryPieChart)
-    AiService ->> ChartTool: 执行 createCategoryPieChart(...)
-    ChartTool ->> QuickChart: POST /chart/create
+    AiService ->> ChartTool: 执行 createCategoryPieChart(categories, amounts)
+    ChartTool ->> QuickChart: POST /chart/create (交换短链)
     QuickChart -->> ChartTool: 返回短链 https://quickchart.io/chart/render/zf-...
     ChartTool -->> AiService: 返回短链
-    AiService ->> Model: 回传 ToolExecutionResult
-    Model -->> AiService: 返回最终带图表短链与深度分析的 Markdown 文本
+    AiService ->> Model: 回传 ToolExecutionResult (图表已就绪)
+    Model -->> AiService: 返回图文并茂、数字无幻觉的完整 Markdown 研报
     AiService -->> Agent: 返回分析报告文本
-    Agent ->> Slack: postBlockMessage (发送至主人私信 U0AM8G9AARF)
-    Slack -->> Agent: 投递成功 ✅
-    Agent -->> User: 完成汇报
+    Agent -->> CoFunc: 返回最终 FinancialReport
+    CoFunc ->> Slack: postBlockMessage (发送至主人私信 U0AM8G9AARF)
+    Slack -->> CoFunc: 投递成功 ✅
 ```
 
 ---
@@ -362,7 +369,7 @@ sequenceDiagram
 | 测试类全限定名 | 测试目标与断言 |
 | :--- | :--- |
 | `com.finance.etl.model.FinancialChatModelFactoryTest` | 测试从 `.env` 装配并向 LiteLLM 发送 Ping，验证 `gemini-3.8-flash` 成功应答 |
-| `com.finance.etl.repository.FinancialDwsDaoTest` | 直连 Trino 查询生产/测试的 9 月数据，断言 `net_expense` 精准为 `22679.46` |
 | `com.finance.etl.client.QuickChartClientTest` | 测试 POST 接口生成短链，验证返回以 `https://quickchart.io/chart/render/` 开头且非空 |
+| `com.finance.etl.tools.FinancialChartToolsTest` | 测试自动剔除 0 元项并成功生成环形饼图与商户柱状图短链 |
 | `com.finance.etl.client.SlackYuiClientTest` | 测试向主人的私聊频道发送一条测试验证卡片 |
-| `com.finance.etl.agent.FinancialAdvisorAgentTest` | **全链路端到端集成测试**：驱动 Yui 完成 2 次 Tool Calls，验证返回包含真实金额与图表短链 |
+| `com.finance.etl.agent.FinancialAdvisorAgentTest` | **全链路端到端集成测试**：驱动 Yui 单轮上下文生成研报，验证平账金额与图表短链 |
