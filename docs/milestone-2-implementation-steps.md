@@ -28,7 +28,7 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 
 ## 2. 详细实施步骤 (Step-by-Step)
 
-整个 M2 划分为 **7 个循序渐进的交付步骤**，步步有断言、步步有验证：
+整个 M2 划分为 **8 个循序渐进的交付步骤**，步步有断言、步步有验证：
 
 ```text
 [Step 2.1: 引入 Maven 依赖] 
@@ -43,7 +43,9 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
              ⬇
 [Step 2.6: 编写 Flink 双流广播汇聚算子 FinancialReportBroadcastProcessFunction (P=1)]
              ⬇
-[Step 2.7: 编写 Flink 统一批作业 FinancialReporterJob 与全链路端到端验收]
+[Step 2.7: 编写 Flink 流水线编排实体 FinancialReporterPipeline]
+             ⬇
+[Step 2.8: 编写 Flink 统一批作业 FinancialReporterJob 与全链路端到端验收]
 ```
 
 ---
@@ -114,11 +116,33 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 
 ---
 
-### 步骤 2.6：端到端集成测试与实盘报告验收 (`FinancialAdvisorAgentTest.java`)
-* **核心用例**：
-  * **用例 1 (双流上下文驱动报告生成)**：给 Agent 传入封装好 9 月宏观指标与微观明细的 `FinancialReportContext`，验证大模型自主调用 `createCategoryPieChart` 与 `createMerchantBarChart` 生成短链；
-  * **用例 2 (金额真实性与平账验证)**：断言 Agent 生成的研报中，净支出（`22679.46`）、理赔（`2790.59`）与明细案例金额完全严丝合缝；
-  * **用例 3 (Slack 卡片交付验收)**：断言生成的 Block Kit 卡片可成功投递且图片短链渲染正常。
+### 步骤 2.6：编写 Flink 双流广播汇聚算子 (`FinancialReportBroadcastProcessFunction`)
+* **包路径**：`com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction`
+* **职责**：继承 Flink `BroadcastProcessFunction`，**显式声明 `.setParallelism(1)` 全局单例执行**；
+  * **广播端 (`processBroadcastElement`)**：接收 DWS 宏观大盘统计行并存入广播状态；
+  * **数据流端 (`processElement`)**：流式接收微观交易明细，维护 Top-N 案例缓冲池；
+  * **批结束触发器**：组装包含宏观数字与微观案例的完整 `FinancialReportContext`，投喂给 AI 智能体生成研报。
+
+---
+
+### 步骤 2.7：编写 Flink 流水线编排实体 (`FinancialReporterPipeline`)
+* **包路径**：`com.finance.etl.pipeline.FinancialReporterPipeline`
+* **职责**：遵循整洁架构与依赖倒置原则 (DIP)，严格对标 `SmsOdsToDwdPipeline` 范式。
+  * 接收外部注入的 `Source<DwsSummaryRecord, ?, ?>`（宏观流源）与 `Source<FinancialTransaction, ?, ?>`（微观流源）；
+  * 编排 `microStream.connect(macroBroadcastStream).process(reportFunction).setParallelism(1)` 数据流拓扑；
+  * 提供可插拔的 Sink 输出挂载能力（支持 Mock 输出与真实投递验证）。
+
+---
+
+### 步骤 2.8：编写 Flink 统一批作业与全链路端到端验收 (`FinancialReporterJob` & 测试套件)
+1. **统一批作业启动入口 (`com.finance.etl.jobs.FinancialReporterJob`)**：
+   * 负责 Flink `StreamExecutionEnvironment` 批模式配置；
+   * 解析命令行运行参数（支持 `--period DAILY/WEEKLY/MONTHLY` 与日期范围）；
+   * 通过 Trino JDBC 构建双流输入源，委托 `FinancialReporterPipeline` 编排提交作业。
+2. **端到端集成测试与实盘报告验收 (`FinancialAdvisorAgentTest.java` & `FinancialReporterPipelineTest.java`)**：
+   * **用例 1 (双流上下文驱动报告生成)**：给 Agent 传入封装好 9 月宏观指标与微观明细的 `FinancialReportContext`，验证大模型自主调用 `createCategoryPieChart` 与 `createMerchantBarChart` 生成短链；
+   * **用例 2 (金额真实性与平账验证)**：断言 Agent 生成的研报中，净支出（`22443.56`）、理赔（`2790.59`）与明细案例金额完全严丝合缝；
+   * **用例 3 (Slack 卡片交付验收)**：断言生成的 Block Kit 卡片可成功投递且图片短链在客户端直接渲染显示。
 
 ---
 
@@ -129,15 +153,16 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 | `com.finance.etl.model.FinancialChatModelFactory` | 模型工厂 | LangChain4j OpenAi | 统一注入 LiteLLM 与 Gemini 3.8 Flash |
 | `com.finance.etl.model.FinancialReportContext` | 领域模型 | Lombok / POJO | 承载双流汇聚后的宏观指标与微观明细 |
 | `com.finance.etl.client.QuickChartClient` | 外部服务客户端 | JDK 21 HttpClient | 负责 POST 交换图表短链 |
-| `com.finance.etl.client.SlackYuiClient` | 外部服务客户端 | JDK 21 HttpClient | 负责向主人 Slack 推送 Block Kit 卡片 |
+| `com.finance.etl.client.SlackYuiClient` | 外部服务客户端 | JDK 21 HttpClient | 负责向主人 Slack 推送 Block Kit 原生图片卡片 |
 | `com.finance.etl.tools.FinancialChartTools` | Agent 武器库 | `QuickChartClient` | 暴露画图能力 (`@Tool`) |
 | `com.finance.etl.service.FinancialAdvisorService` | 声明式 AI 契约 | LangChain4j 注解 | 锁定 Yui 秘书人设与零幻觉红线 |
 | `com.finance.etl.agent.FinancialAdvisorAgent` | 智能体实体本体 | `AiServices` | 提供 `fromConfig()` 与一键分析接口 |
-| `com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction` | Flink 算子 | Flink Streaming API | 负责双流广播汇聚与上下文打包 |
+| `com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction` | Flink 算子 | Flink Streaming API | 负责双流广播汇聚与上下文打包 (P=1) |
+| `com.finance.etl.pipeline.FinancialReporterPipeline` | Flink 拓扑编排 | Flink DataStream API | 规范化双流流图编排 (DIP 原则) |
 | `com.finance.etl.jobs.FinancialReporterJob` | Flink 批作业 | Flink Batch Pipeline | 统一入口，挂载双流并执行端到端闭环 |
 
 ---
 
 ## 4. 立即执行计划 (Action Items)
 
-按照本步骤指南，我们立即从 **Step 2.1（修改 `pom.xml` 引入 LangChain4j）** 开始，依序推进至 Step 2.6 完成实盘验收！
+按照本步骤指南，我们立即从 **Step 2.1** 开始依序推进至 **Step 2.8** 完成全链路工程化闭环！

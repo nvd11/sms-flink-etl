@@ -31,8 +31,14 @@ src
 │   │   ├── FinancialReportContext.java           -- 双流汇聚后的结构化财务报表上下文
 │   │   └── DwsSummaryRecord.java                 -- Trino JdbcSource 抽取的宏观聚合实体
 │   │
+│   ├── pipeline/                                 [Flink 拓扑编排层]
+│   │   └── FinancialReporterPipeline.java        -- 🎯 编排 DWS 宏观广播流 + DWD 微观流 -> 汇聚算子 -> 投递
+│   │
+│   ├── jobs/                                     [Flink 批作业启动层]
+│   │   └── FinancialReporterJob.java             -- 🎯 统一 Flink 批作业调度入口 (接收 --period 与日期参数)
+│   │
 │   ├── transform/report/                         [Flink 双流汇聚转换算子]
-│   │   └── FinancialReportBroadcastProcessFunction.java -- 双流广播汇聚算子 (DWS宏观流 + DWD微观流)
+│   │   └── FinancialReportBroadcastProcessFunction.java -- 双流广播汇聚算子 (DWS宏观流 + DWD微观流, P=1)
 │   │
 │   ├── tools/                                    [Agent 专用绘图工具箱 (@Tool)]
 │   │   └── FinancialChartTools.java              -- 暴露 QuickChart 短链生成能力 (@Tool)
@@ -51,6 +57,9 @@ src
     │
     ├── transform/report/
     │   └── FinancialReportBroadcastProcessFunctionTest.java -- 双流广播汇聚算子单元测试
+    │
+    ├── pipeline/
+    │   └── FinancialReporterPipelineTest.java    -- Flink 报表流水线端到端流图集成测试
     │
     └── client/
         ├── QuickChartClientTest.java             -- QuickChart 短链生成集成测试
@@ -114,12 +123,26 @@ classDiagram
         +processBroadcastElement(DwsSummaryRecord, Context, Collector) void
     }
 
+    class FinancialReporterPipeline {
+        -Source macroSource
+        -Source microSource
+        -FinancialReportBroadcastProcessFunction reportFunction
+        -Sink reportSink
+        +execute(StreamExecutionEnvironment env) void
+    }
+
+    class FinancialReporterJob {
+        +main(String[] args) void
+    }
+
     FinancialAdvisorAgent --> FinancialAdvisorService : 持有并调用
     FinancialAdvisorService ..> FinancialChatModelFactory : 模型驱动 (AiServices)
     FinancialAdvisorService ..> FinancialChartTools : 声明式绘图工具
     FinancialChartTools --> QuickChartClient : 生成短链
     FinancialReportBroadcastProcessFunction --> FinancialAdvisorAgent : 组装 Context 后驱动生成研报
     FinancialReportBroadcastProcessFunction --> SlackYuiClient : 消息投递
+    FinancialReporterPipeline --> FinancialReportBroadcastProcessFunction : 编排双流汇聚
+    FinancialReporterJob --> FinancialReporterPipeline : 作业启动入口
 ```
 
 ---
@@ -239,7 +262,68 @@ classDiagram
 
 ---
 
-### 2.7 图表工具集：`com.finance.etl.tools.FinancialChartTools`
+### 2.7 拓扑编排流水线：`com.finance.etl.pipeline.FinancialReporterPipeline`
+* **包路径**：`com.finance.etl.pipeline`
+* **职责**：遵循整洁架构与依赖倒置原则 (DIP)，专职编排双流数据流向。将宏观 DWS 流与微观 DWD 流通过 BroadcastStream 连接，并挂载 `FinancialReportBroadcastProcessFunction`。
+* **架构抽象设计**：
+  ```java
+  public class FinancialReporterPipeline {
+      private final Source<DwsSummaryRecord, ?, ?> macroSource;
+      private final Source<FinancialTransaction, ?, ?> microSource;
+      private final FinancialReportBroadcastProcessFunction reportFunction;
+      private final Sink<String, ?> reportSink;
+
+      public FinancialReporterPipeline(
+              Source<DwsSummaryRecord, ?, ?> macroSource,
+              Source<FinancialTransaction, ?, ?> microSource,
+              FinancialReportBroadcastProcessFunction reportFunction,
+              Sink<String, ?> reportSink) { ... }
+
+      public void build(StreamExecutionEnvironment env) {
+          // 1. 读取宏观大盘流并声明广播状态
+          DataStream<DwsSummaryRecord> macroStream = env.fromSource(macroSource, ...);
+          BroadcastStream<DwsSummaryRecord> broadcastMacro = macroStream.broadcast(MACRO_STATE_DESCRIPTOR);
+
+          // 2. 读取微观明细流并与广播流连接
+          DataStream<FinancialTransaction> microStream = env.fromSource(microSource, ...);
+
+          // 3. 汇聚并强制单例执行 (Parallelism = 1)
+          DataStream<String> reportStream = microStream
+                  .connect(broadcastMacro)
+                  .process(reportFunction)
+                  .setParallelism(1);
+
+          // 4. 挂载输出 Sink
+          if (reportSink != null) {
+              reportStream.sinkTo(reportSink);
+          }
+      }
+  }
+  ```
+
+---
+
+### 2.8 统一调度批作业入口：`com.finance.etl.jobs.FinancialReporterJob`
+* **包路径**：`com.finance.etl.jobs`
+* **职责**：作为 Flink 批处理的主程序入口类。解析启动参数（如 `--period DAILY --date 2026-10-05`），加载配置环境，构造 Trino 双流 Source，组装 `FinancialReporterPipeline` 并提交执行。
+* **运行机制**：
+  ```java
+  public class FinancialReporterJob {
+      public static void main(String[] args) throws Exception {
+          // 1. 初始化 Flink 批执行环境与配置
+          StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+          env.setRuntimeMode(RuntimeExecutionMode.BATCH);
+
+          // 2. 解析周期参数与对应 Trino SQL
+          // 3. 构造双流 Source 与汇聚算子
+          // 4. 委托 Pipeline 编排执行并提交作业
+      }
+  }
+  ```
+
+---
+
+### 2.9 图表工具集：`com.finance.etl.tools.FinancialChartTools`
 * **包路径**：`com.finance.etl.tools`
 * **职责**：LangChain4j 专属绘图工具箱。持有 `QuickChartClient`，使用 `@Tool` 和 `@P` 向大模型声明图表绘制能力。
 * **方法声明**：
@@ -267,7 +351,7 @@ classDiagram
 
 ---
 
-### 2.8 声明式 AI 契约接口：`com.finance.etl.service.FinancialAdvisorService`
+### 2.10 声明式 AI 契约接口：`com.finance.etl.service.FinancialAdvisorService`
 * **包路径**：`com.finance.etl.service`
 * **职责**：声明式 AI 接口规范，由 LangChain4j 的 `AiServices.builder()` 自动动态代理生成实现类。
 * **注解与接口定义**：
@@ -288,7 +372,7 @@ classDiagram
 
 ---
 
-### 2.8 智能体实体本体类：`com.finance.etl.agent.FinancialAdvisorAgent`
+### 2.11 智能体实体本体类：`com.finance.etl.agent.FinancialAdvisorAgent`
 * **包路径**：`com.finance.etl.agent`
 * **职责**：整个 M2 阶段的**核心智能体实体**。内置 `fromConfig()` 组装工厂，对外提供开箱即用的一键分析业务方法。
 * **核心类实现蓝图**：
@@ -372,4 +456,6 @@ sequenceDiagram
 | `com.finance.etl.client.QuickChartClientTest` | 测试 POST 接口生成短链，验证返回以 `https://quickchart.io/chart/render/` 开头且非空 |
 | `com.finance.etl.tools.FinancialChartToolsTest` | 测试自动剔除 0 元项并成功生成环形饼图与商户柱状图短链 |
 | `com.finance.etl.client.SlackYuiClientTest` | 测试向主人的私聊频道发送一条测试验证卡片 |
+| `com.finance.etl.transform.report.FinancialReportBroadcastProcessFunctionTest` | 测试 Flink 广播流汇聚状态逻辑与 Top-N 案例提取正确性 |
+| `com.finance.etl.pipeline.FinancialReporterPipelineTest` | 测试 Flink 端到端流图编排与批执行链路 |
 | `com.finance.etl.agent.FinancialAdvisorAgentTest` | **全链路端到端集成测试**：驱动 Yui 单轮上下文生成研报，验证平账金额与图表短链 |
