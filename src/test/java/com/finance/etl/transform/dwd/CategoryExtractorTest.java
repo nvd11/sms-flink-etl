@@ -37,13 +37,20 @@ class CategoryExtractorTest {
             "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-知味园自选快餐。', FOOD",
             "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-煲珠公收款。', FOOD",
             "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-广州市阿赛小面餐饮管理有限公司。', FOOD",
-            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-拼多多平台商户。', SHOPPING",
-            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-浙江天猫供应链管理有限公司。', SHOPPING",
-            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-盒马。', SHOPPING",
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-拼多多平台商户。', ONLINE_SHOPPING",
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-浙江天猫供应链管理有限公司。', ONLINE_SHOPPING",
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-盒马。', OFFLINE_SHOPPING",
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-沃尔玛（中国）投资有限公司。', OFFLINE_SHOPPING",
             "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:支付宝-广州市番禺区何贤纪念医院。', MEDICAL",
             "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-福源堂大药房。', MEDICAL",
-            "'10690661440018【中意人寿】尊敬的潘瑞成：赔款金额279.95元将于0-5个工作日到账', OTHER",
-            "'10692576032【平安产险】尊敬的潘文林，您已付6646.00元的保单已承保', OTHER"
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-茶理宜世。', FOOD",
+            "'106980095508【广发银行】您尾号3342信用卡消费，交易商户:财付通-美团。', FOOD",
+            "'10086【话费账单】尊敬的客户，您08月01日-08月31日共消费199.10元', COMMUNICATION",
+            "'10692576032【平安产险】尊敬的潘文林，您已付6646.00元的保单已承保', INSURANCE",
+            "'106980095508【广发银行】您尾号3342信用卡26日19:37消费30.00人民币，交易商户:财付通-广州市浩丰物业管理有限公司。', PROPERTY_MANAGEMENT",
+            "'106980095508【广发银行】您尾号3342信用卡01日15:02消费5.00人民币，交易商户:财付通-苏荷文旅。', TRAVEL",
+            "'106980095508【广发银行】您尾号3342信用卡21日23:39消费88.00人民币，交易商户:支付宝-王磊。', PERSONAL_TRANSFER",
+            "'106980095508【广发银行】您尾号3342信用卡16日00:41消费4.75人民币，交易商户:支付宝-支付宝支付科技有限公司。', OTHER"
     })
     void testCategoryClassification(String rawBody, String expectedCategory) {
         Map<String, Object> result = extractor.extract(createRecord(rawBody));
@@ -99,18 +106,24 @@ class CategoryExtractorTest {
         System.out.println("================================================================================");
         System.out.println("📈 [Category Audit Summary]");
         System.out.printf("  • 总扫描记录数 (Total ODS)       : %d 封\n", totalCount);
-        System.out.println("  • 五大消费类目分布 (Category Distribution):");
+        System.out.println("  • 十一大消费类目分布 (Category Distribution):");
         final int finalTotalCount = totalCount;
         categoryCounts.entrySet().stream()
                 .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
-                .forEach(e -> System.out.printf("      - %-12s : %3d 笔 (占 %.1f%%)\n",
+                .forEach(e -> System.out.printf("      - %-22s : %3d 笔 (占 %.1f%%)\n",
                         e.getKey(), e.getValue(), (double) e.getValue() * 100 / finalTotalCount));
         System.out.println("================================================================================");
 
         assertTrue(totalCount > 0);
         assertTrue(categoryCounts.containsKey("FOOD"));
         assertTrue(categoryCounts.containsKey("TRANSPORT"));
-        assertTrue(categoryCounts.containsKey("SHOPPING"));
+        assertTrue(categoryCounts.containsKey("ONLINE_SHOPPING"));
+        assertTrue(categoryCounts.containsKey("OFFLINE_SHOPPING"));
         assertTrue(categoryCounts.containsKey("MEDICAL"));
+        assertTrue(categoryCounts.containsKey("COMMUNICATION"));
+        assertTrue(categoryCounts.containsKey("INSURANCE"));
+        assertTrue(categoryCounts.containsKey("PROPERTY_MANAGEMENT"));
+        assertTrue(categoryCounts.containsKey("TRAVEL"));
+        assertTrue(categoryCounts.containsKey("PERSONAL_TRANSFER"));
     }
 }

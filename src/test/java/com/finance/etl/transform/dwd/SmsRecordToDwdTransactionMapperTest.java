@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -42,7 +46,7 @@ class SmsRecordToDwdTransactionMapperTest {
     }
 
     @Test
-    @DisplayName("测试保险理赔短信组装：收入、非消费、归类 OTHER")
+    @DisplayName("测试保险理赔短信组装：收入、非消费、归类 INSURANCE")
     void testMapInsuranceIncomeSms() throws Exception {
         SmsRecordToDwdTransactionMapper mapper = new SmsRecordToDwdTransactionMapper();
 
@@ -57,7 +61,7 @@ class SmsRecordToDwdTransactionMapperTest {
         assertEquals("INFLOW", tx.getDirection());
         assertEquals("INCOME", tx.getTxType());
         assertEquals("中意人寿", tx.getCleanedMerchant());
-        assertEquals("OTHER", tx.getCategory());
+        assertEquals("INSURANCE", tx.getCategory());
     }
 
     @Test

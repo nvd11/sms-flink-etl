@@ -110,7 +110,7 @@ public class IcebergR2Source implements Serializable {
                 .streaming(false); // 🎯 严格锁定为批处理 (Bounded Batch Mode)
 
         List<Expression> filters = new ArrayList<>();
-        if (minRecordId != null && minRecordId > 0L) {
+        if (minRecordId != null && minRecordId >= 0L) {
             LOG.info("🎯 [Iceberg Source] Applying incremental lower-bound filter: id > {}", minRecordId);
             filters.add(Expressions.greaterThan("id", minRecordId));
         }

@@ -48,17 +48,11 @@ class DwdIcebergR2SinkIntegrationTest {
         // 2. 映射为 RowData
         DataStream<RowData> rowStream = txStream.map(new FinancialTransactionToRowDataMapper());
 
-        // 3. 构建 Sink 门面并挂载
-        IcebergR2Sink dwdSink = IcebergR2Sink.fromConfig("dwd_financial_transactions", "id,tx_time");
-        DataStreamSink<Void> sink = dwdSink.append(rowStream);
+        // 3. 构建 Sink 并挂载
+        IcebergR2Sink sink = IcebergR2Sink.fromConfig("dwd_financial_transactions", "id,tx_time");
+        DataStreamSink<Void> dataStreamSink = sink.append(rowStream);
 
-        assertNotNull(sink, "挂载完成后必须返回非空的 DataStreamSink");
-
-        // 4. 验证 Flink 执行计划生成无报错
-        assertDoesNotThrow(() -> {
-            String plan = env.getExecutionPlan();
-            assertNotNull(plan);
-            assertTrue(plan.contains("FinancialTransactionToRowDataMapper") || plan.contains("Map"));
-        }, "Flink 执行计划必须能够正常编译生成");
+        assertNotNull(dataStreamSink);
+        assertEquals("IcebergSink finance.finance_dev.dwd_financial_transactions", dataStreamSink.getTransformation().getName());
     }
 }

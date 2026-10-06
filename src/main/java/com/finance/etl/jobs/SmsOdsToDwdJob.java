@@ -46,10 +46,16 @@ public class SmsOdsToDwdJob {
         LOG.info("⚡ [Flink Runtime] Configured parallelism: {} slot thread(s) (TaskExecutor slots aligned: {})",
                 parallelism, parallelism);
 
-        // 2. 探查水位：从 etl_sync_offsets 读取上一次成功清洗的 MAX(id)
+        // 2. 探查水位：从 etl_sync_offsets 读取上一次成功清洗的 MAX(id)；支持 DWD_OVERRIDE_OFFSET 强制全量覆盖刷新
         long lastOffset;
-        try (IcebergOffsetRepository offsetRepo = IcebergOffsetRepository.fromConfig()) {
-            lastOffset = offsetRepo.getLatestOffset(JOB_NAME, CHANNEL_ICEBERG_ODS, SOURCE_TARGET_ODS);
+        String overrideOffsetStr = ConfigUtils.get("DWD_OVERRIDE_OFFSET", null);
+        if (overrideOffsetStr != null && !overrideOffsetStr.trim().isEmpty()) {
+            lastOffset = Long.parseLong(overrideOffsetStr.trim());
+            LOG.warn("⚠️ [DWD Watermark Override] Forcing lastOffset={} via DWD_OVERRIDE_OFFSET", lastOffset);
+        } else {
+            try (IcebergOffsetRepository offsetRepo = IcebergOffsetRepository.fromConfig()) {
+                lastOffset = offsetRepo.getLatestOffset(JOB_NAME, CHANNEL_ICEBERG_ODS, SOURCE_TARGET_ODS);
+            }
         }
         LOG.info("🌊 [DWD Watermark] Current last processed ODS record ID: {}", lastOffset);
 

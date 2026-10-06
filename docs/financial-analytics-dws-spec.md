@@ -65,9 +65,15 @@
 | `total_transfer` | `DECIMAL(12,2)` | 当日信用卡还款等转账金额 (CNY) |
 | `food_expense` | `DECIMAL(12,2)` | 当日餐饮美食开销 |
 | `transport_expense`| `DECIMAL(12,2)` | 当日交通打车出行开销 |
-| `shopping_expense` | `DECIMAL(12,2)` | 当日商超网购开销 |
-| `medical_expense`  | `DECIMAL(12,2)` | 当日医疗药品支出 |
-| `other_expense`    | `DECIMAL(12,2)` | 当日其他支出 |
+| `online_shopping_expense` | `DECIMAL(12,2)` | 当日线上电商网购开销 (淘宝/拼多多/天猫/京东) |
+| `offline_shopping_expense`| `DECIMAL(12,2)` | 当日线下商超零售开销 (盒马/沃尔玛/大润发/实体店) |
+| `medical_expense`  | `DECIMAL(12,2)` | 当日医疗健康药品支出 |
+| `communication_expense`| `DECIMAL(12,2)`| 当日电信通信话费宽带支出 |
+| `insurance_expense`| `DECIMAL(12,2)`| 当日保险保费支出 (车险/人身险等) |
+| `property_expense` | `DECIMAL(12,2)`| 当日物业管理与社区服务支出 |
+| `travel_expense`   | `DECIMAL(12,2)`| 当日旅游文旅与度假门票支出 |
+| `personal_transfer_expense`| `DECIMAL(12,2)`| 当日个人转账扫码支出 |
+| `other_expense`    | `DECIMAL(12,2)` | 当日其他平台杂项支出 |
 | `max_single_amount`| `DECIMAL(12,2)` | 当日最大单笔支出金额 |
 | `max_merchant`     | `VARCHAR` | 当日最大单笔支出的商户名 |
 
@@ -95,8 +101,19 @@
 | `avg_daily_expense`| `DECIMAL(12,2)` | 本周日均消费开销 (`net_expense / 7`) |
 | `weekend_expense`| `DECIMAL(12,2)` | 周末两天开销总额 (周六 + 周日) |
 | `weekday_expense`| `DECIMAL(12,2)` | 周中工作日开销总额 (周一至周五) |
-| `top1_category` | `VARCHAR` | 本周开销占比第一的大类 |
-| `top1_category_amt`| `DECIMAL(12,2)` | 该第一大类消费金额 |
+| `food_expense`   | `DECIMAL(12,2)` | 本周餐饮美食开销 |
+| `transport_expense`| `DECIMAL(12,2)`| 本周交通出行开销 |
+| `online_shopping_expense`| `DECIMAL(12,2)`| 本周线上电商网购开销 |
+| `offline_shopping_expense`| `DECIMAL(12,2)`| 本周线下实体商超零售开销 |
+| `medical_expense`| `DECIMAL(12,2)` | 本周医疗健康药品开销 |
+| `communication_expense`| `DECIMAL(12,2)`| 本周电信通信话费宽带开销 |
+| `insurance_expense`| `DECIMAL(12,2)`| 本周保险保费支出 |
+| `property_expense`| `DECIMAL(12,2)`| 本周物业管理服务开销 |
+| `travel_expense` | `DECIMAL(12,2)` | 本周旅游度假文旅开销 |
+| `personal_transfer_expense`| `DECIMAL(12,2)`| 本周个人转账扫码支出 |
+| `other_expense`  | `DECIMAL(12,2)` | 本周其他杂项支出 |
+| `top1_category`  | `VARCHAR`       | 本周开销占比第一的大类 |
+| `top1_category_amt`| `DECIMAL(12,2)`| 该第一大类消费金额 |
 | `top_merchants_json`| `VARCHAR` | 本周消费 Top 3 商户排行榜概要 |
 
 ---
@@ -123,9 +140,15 @@
 | `boc_expense_cny` | `DECIMAL(12,2)`| 中国银行房贷/供款流水对账专用 |
 | `food_expense` | `DECIMAL(12,2)`| 全月餐饮美食总额与占比 |
 | `transport_expense`| `DECIMAL(12,2)`| 全月交通打车总额与占比 |
-| `shopping_expense` | `DECIMAL(12,2)`| 全月电商生活购物总额与占比 |
+| `online_shopping_expense` | `DECIMAL(12,2)`| 全月线上电商网购总额与占比 |
+| `offline_shopping_expense`| `DECIMAL(12,2)`| 全月线下商超百货总额与占比 |
 | `medical_expense`  | `DECIMAL(12,2)`| 全月医疗健康开销总额 |
-| `other_expense`    | `DECIMAL(12,2)`| 全月其他支出 (车险保单等) |
+| `communication_expense`| `DECIMAL(12,2)`| 全月电信通信话费宽带总额 |
+| `insurance_expense`| `DECIMAL(12,2)`| 全月保险保费支出 (车险/人身险等) |
+| `property_expense` | `DECIMAL(12,2)`| 全月物业管理与社区服务总额 |
+| `travel_expense`   | `DECIMAL(12,2)`| 全月旅游文旅与度假门票总额 |
+| `personal_transfer_expense`| `DECIMAL(12,2)`| 全月个人转账扫码支出总额 |
+| `other_expense`    | `DECIMAL(12,2)`| 全月其他平台杂项支出 |
 
 ---
 
@@ -257,15 +280,57 @@ Yui 通过 Slack 原生 Web API（`chat.postMessage`）与主人（`U0AM8G9AARF`
 
 ```mermaid
 graph TB
-    DWD["iceberg.finance.dwd_financial_transactions<br/>(事实明细表)"] -->|SQL 窗口与分组聚合| DWS["Trino DWS 汇总模型<br/>(Daily / Weekly / Monthly 视图)"]
-    DWS -->|Trino REST/JDBC API| SOURCE["Flink Report Source 算子<br/>(读取待分析周期指标)"]
-    SOURCE -->|DataStream| FUNC["FinancialAdvisorProcessFunction<br/>(RichMapFunction 核心大脑)"]
-    FUNC -->|LangChain4j AiServices| LITELLM["LiteLLM 统一网关<br/>(Gemini-3.8-Flash)"]
-    FUNC -->|POST /chart/create| QC["QuickChart 图表短链服务"]
-    FUNC -->|双流输出: FinancialReport| SINK_SPLIT{"Flink 输出路由"}
-    SINK_SPLIT -->|落盘分支: IcebergR2Sink| ADS["iceberg.finance.ads_financial_reports<br/>(ADS 智能报告事实表)"]
-    SINK_SPLIT -->|推送分支: SlackYuiSink| YUI["Slack Bot Yui (chat.postMessage)<br/>(私信直达主人 U0AM8G9AARF)"]
+    subgraph StorageLayer ["湖仓与计算网关层 (Lakehouse & Trino OLAP)"]
+        DWD_TAB["iceberg.finance.dwd_financial_transactions<br/>(DWD 物理明细表 - Iceberg/R2)"]
+        DWS_VIEW["Trino DWS 视图模型<br/>(Daily / Weekly / Monthly 聚合视图)"]
+    end
+
+    subgraph DualSource ["Flink 双流数据源接入 (Trino JDBC Dual-Source)"]
+        DWS_SRC["JdbcSource (宏观指标流)<br/>SELECT * FROM dws_financial_summary_monthly"]
+        DWD_SRC["JdbcSource (微观大额案例流)<br/>SELECT * FROM dwd_financial_transactions ORDER BY amount_cny DESC LIMIT 10"]
+    end
+
+    subgraph CoProcess ["双流汇聚与智能分析算子 (Broadcast CoProcess)"]
+        BROADCAST["broadcast()<br/>广播宏观统计指标"]
+        CO_FUNC["FinancialReportBroadcastProcessFunction<br/>(setParallelism(1) 单例全局汇聚算子)"]
+        AGENT["LangChain4j FinancialAdvisorAgent<br/>(驱动 Gemini 3.8 Flash)"]
+        QC["QuickChartClient<br/>(POST /chart/create 生成短链)"]
+    end
+
+    subgraph OutputLayer ["输出路由与展示层 (Sink & Deliver)"]
+        ADS_SINK["IcebergSink<br/>(写入 ads_financial_reports 事实表)"]
+        SLACK_SINK["SlackYuiClient<br/>(推送到主人 U0AM8G9AARF)"]
+    end
+
+    DWD_TAB -->|SQL 窗口与分组聚合| DWS_VIEW
+    DWS_VIEW -->|Trino JDBC 流式提取| DWS_SRC
+    DWD_TAB -->|Trino JDBC 排序下推切片| DWD_SRC
+
+    DWD_SRC -->|微观 Top 明细流| CO_FUNC
+    DWS_SRC --> BROADCAST
+    BROADCAST -->|广播连接| CO_FUNC
+
+    CO_FUNC -->|打包完整 Context| AGENT
+    AGENT -->|调用绘图工具| QC
+    AGENT -->|产出结构化报表| CO_FUNC
+
+    CO_FUNC --> ADS_SINK
+    CO_FUNC --> SLACK_SINK
 ```
+
+### 6.1 统一 Trino 双流广播汇聚架构优势 (Trino Dual-Source Broadcast CoProcess)
+1. **统一数据网关与下推优化 (Query Pushdown)**：
+   - **宏观流**：Trino 毫秒级计算视图，直接输出总支出、净额、还款划转、理赔与分类总计；
+   - **微观流**：利用 Trino 的 SQL 计算能力将 `ORDER BY amount_cny DESC LIMIT 10` 完全下推至引擎层，网络只传输排好序的最具代表性 Top 案例，避免 Flink 拖拽全量明细的大开销；
+   - 统一由 Trino 提供标准 JDBC 流式对接，彻底免去直接操作低层 Iceberg S3A 裸文件的繁重依赖与网络抖动。
+2. **全局单例消费守护与防分散 (setParallelism(1))**：
+   - 报告生成算子 `FinancialReportBroadcastProcessFunction` 显式设置并发度为 1；
+   - 彻底避免主数据流分片导致的重复调用与报告分散，确保全局唯一一份专业研报；
+   - 算子内部转变为纯内存计算与 Prompt 装配，完全消除外部读 IO 异味。
+3. **宏观精确平账 + 微观生动案例 (Macro + Micro)**：
+   - 宏观大盘数字绝对精确平账，根除 LLM 加减法幻觉；
+   - 微观 Top 动账直接充当研报典型论据（如医疗大额、大额设备、陪护支出）；
+   - 大模型单轮调用即可完成图文并茂的分析，Token 消耗与响应耗时双双减半。
 
 ### 6.1 核心技术栈选型与规范 (Tech Stack & Conventions)
 * **Flink 批处理单一通用作业 (`FinancialReporterJob`)**:
