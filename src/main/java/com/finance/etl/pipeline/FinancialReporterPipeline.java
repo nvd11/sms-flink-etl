@@ -59,7 +59,11 @@ public class FinancialReporterPipeline {
         Objects.requireNonNull(env, "StreamExecutionEnvironment must not be null");
         LOG.info("⚡ [FinancialReporterPipeline] Building Dual-Stream Flink Topology...");
 
-        // 1. 读取宏观大盘流并声明广播状态
+        // 1. 读取宏观大盘流 (macroSource: Trino DWS 平账大盘指标，仅1行数据，作为全局对照真理源)
+        // 🎯 核心注解: 使用 WatermarkStrategy.noWatermarks() 的原因：
+        // 1) 批处理模式下数据为有界数据集 (Bounded Source)，读取结束即自然终止，无需水位线推算乱序延迟；
+        // 2) 广播双流汇聚算子基于数据到达与内存状态缓存触发，未定义任何事件时间窗口 (Event-Time Window)；
+        // 3) 关闭水位线生成可彻底消除后台无意义的水位线广播事件开销与多流时钟对齐等待，获得最高流水线传输性能。
         DataStream<DwsSummaryRecord> macroStream = env
                 .fromSource(macroSource, WatermarkStrategy.noWatermarks(), "Macro-DwsSummary-Source")
                 .uid("macro-dws-source");
@@ -67,7 +71,8 @@ public class FinancialReporterPipeline {
         BroadcastStream<DwsSummaryRecord> broadcastMacroStream = macroStream
                 .broadcast(FinancialReportBroadcastProcessFunction.MACRO_STATE_DESCRIPTOR);
 
-        // 2. 读取微观明细流
+        // 2. 读取微观明细流 (microSource: DWD 真实动账事实交易流水明细，为 AI 报告提供具体消费场景论据)
+        // 同样声明 noWatermarks()，纯净消费有界批事实数据
         DataStream<FinancialTransaction> microStream = env
                 .fromSource(microSource, WatermarkStrategy.noWatermarks(), "Micro-DwdTransaction-Source")
                 .uid("micro-dwd-source");
