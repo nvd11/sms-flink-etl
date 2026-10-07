@@ -68,6 +68,15 @@ public class FinancialReporterPipeline {
                 .fromSource(macroSource, WatermarkStrategy.noWatermarks(), "Macro-DwsSummary-Source")
                 .uid("macro-dws-source");
 
+        // 🎯 核心注解: 调用 .broadcast(DESCRIPTOR) 与直接 connect 普通 macroStream 的根本区别：
+        // 1) 【网络传输模式】: 
+        //    - 若仅 connect 普通流，底层采用单播/哈希通道，1 行大盘数据会被网络随机丢给某一个 TaskSlot，其余并发节点将永远拿不到大盘；
+        //    - 调用 .broadcast() 后，底层网络路由切换为 BroadcastPartitioner，数据被 100% 全量网络克隆，
+        //      下游不论有 1 个、10 个还是 100 个并发 Subtask，每个节点的本地 JVM 堆内存中都能独立、完整持有一份权威大盘镜像！
+        // 2) 【流类型与算子支持】: 
+        //    - 普通流连接仅返回 ConnectedStreams (仅支持挂载 CoProcessFunction)；
+        //    - 广播流连接返回专属 BroadcastConnectedStream，下游得以规范挂载 BroadcastProcessFunction，
+        //      受 Flink 状态后端托管管理，并在编译期强制对主流执行 ReadOnlyContext 只读隔离，彻底杜绝并发脏写。
         BroadcastStream<DwsSummaryRecord> broadcastMacroStream = macroStream
                 .broadcast(FinancialReportBroadcastProcessFunction.MACRO_STATE_DESCRIPTOR);
 
@@ -78,6 +87,11 @@ public class FinancialReporterPipeline {
                 .uid("micro-dwd-source");
 
         // 3. 双流连接汇聚并强制单例执行 (Parallelism = 1)
+        // 🎯 核心注解: 为什么即使使用了广播流，这里仍然必须显式锁定 .setParallelism(1)？
+        // - 普通流计算中，microStream 往往被切片并发分发给不同 Subtask 处理；
+        // - 但在本报表生成业务中，AI Agent 生成全景研报必须整吞周期内的全局明细 (挑选全局最高大额大单与各分类代表作)；
+        // - 若切片分散到多个 Worker，各节点拿到的将是残缺流水，造成 AI 盲人摸象；
+        // - 因此通过 .setParallelism(1) 强制单例汇聚，保证全量事实流水一笔不漏地完整收拢在唯一节点的内存缓冲区中投喂给 AI！
         SingleOutputStreamOperator<String> reportStream = microStream
                 .connect(broadcastMacroStream)
                 .process(reportProcessFunction)
