@@ -40,7 +40,22 @@ public class FinancialReportBroadcastProcessFunction
                     TypeInformation.of(DwsSummaryRecord.class)
             );
 
+    // 周期类型: "DAILY" (日度), "WEEKLY" (周度), "MONTHLY" (月度)
     private final String periodType;
+
+    /**
+     * 🎯 核心注解: periodValue 的含义与来源生命周期：
+     * 1) 【具体含义】: 表示当前财务研报对应的具体时间业务窗口取值。
+     *    - 日度场景 (DAILY): 自然日 ISO 字符串，如 "2026-10-05" (YYYY-MM-DD)；
+     *    - 周度场景 (WEEKLY): 周序号字符串，如 "2026-W40" (YYYY-Www)；
+     *    - 月度场景 (MONTHLY): 自然月字符串，如 "2026-09" (YYYY-MM)。
+     * 2) 【数据来源】: 由作业入口层 (FinancialReporterJob) 解析注入：
+     *    - 方式 A: 外部 CLI 参数显式指定 (--date 2026-10-05 或 --month 2026-09)；
+     *    - 方式 B: 定时任务缺省调度时，自动调用 FinancialLakehouseRepository 动态探测湖仓 View 中最新有动账流水的自然日。
+     * 3) 【核心作用】: 
+     *    - 作为广播状态 MapState 的唯一主键 (Key): ctx.getBroadcastState(DESCRIPTOR).put(periodValue, macroRecord)；
+     *    - 注入 FinancialReportContext，作为时间事实基准告知 AI Agent，防止生成研报标题与日期时发生时序幻觉。
+     */
     private final String periodValue;
     private final boolean postToSlack;
 
