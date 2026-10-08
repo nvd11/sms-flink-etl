@@ -103,10 +103,15 @@ public class FinancialReportBroadcastProcessFunction
     /**
      * 2. 广播流宏观大盘处理入口 (processBroadcastElement)
      * 🎯 核心注解:
-     * - Pipeline 中的 macroStream.broadcast(DESCRIPTOR) 仅仅是在【编译期/拓扑声明时】为这块状态划分了内存命名空间并建立广播连接通道；
-     * - 而真正将广播流流过来的宏观大盘实体【真正物理写入】Flink 受托管内存状态仓库的动作，正是发生在这里！
-     * - 持有独占写权限的 Context，通过 ctx.getBroadcastState(DESCRIPTOR).put(key, value) 将大盘平账真理源稳固持久化，
-     *   供集群内本节点随时安全访问与故障自愈。
+     * - 入参 macroRecord 来源与生命周期：
+     *   1) 它 100% 正是从上游广播流 (macroStream) 管道中流出来的实体对象！由 Flink Worker 线程从广播输入队列 (InputGate) 逐条拉取传入；
+     *   2) 上游若发射 1 行 DWS 大盘，本方法在作业生命周期内即精准执行 1 次；若发射多行，则每来一条触发一次；
+     * - 状态入库机制：
+     *   Pipeline 中的 macroStream.broadcast(DESCRIPTOR) 仅仅是在【编译期/拓扑声明时】为这块状态划分了内存命名空间并建立广播连接通道；
+     *   而真正将广播流送达的 macroRecord 实体【物理写入】Flink 状态仓库的动作，正是发生在这里！
+     * - 权限安全：
+     *   持有独占写权限的 Context，通过 ctx.getBroadcastState(DESCRIPTOR).put(periodValue, macroRecord) 
+     *   将大盘平账真理源稳固持久化，供集群内本节点随时安全访问与故障自愈。
      */
     @Override
     public void processBroadcastElement(DwsSummaryRecord macroRecord,
