@@ -22,6 +22,14 @@ import java.util.Objects;
 public class FinancialLakehouseRepository implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(FinancialLakehouseRepository.class);
 
+    static {
+        try {
+            Class.forName("io.trino.jdbc.TrinoDriver");
+        } catch (ClassNotFoundException e) {
+            LOG.warn("Trino JDBC Driver not found on classpath: {}", e.getMessage());
+        }
+    }
+
     private static final String DEFAULT_TRINO_URL = "jdbc:trino://10.0.1.113:30880/iceberg/finance";
     private static final String DEFAULT_TRINO_USER = "jason";
 

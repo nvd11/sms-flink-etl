@@ -136,7 +136,6 @@
             <groupId>io.trino</groupId>
             <artifactId>trino-jdbc</artifactId>
             <version>468</version>
-            <scope>test</scope>
         </dependency>
 
         <!-- 6. 日志框架 SLF4J + Log4j2 -->

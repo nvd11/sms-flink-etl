@@ -198,4 +198,50 @@ class FinancialReporterJobIntegrationTest {
             assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
         }
     }
+
+    @Test
+    @DisplayName("实盘触发：在 dev 环境针对 2026-10-08 执行完整 FinancialReporterJob 并验证研报生成、Slack 发送与 Iceberg 落盘")
+    void testRunFinancialReporterJobDaily20261008() throws Exception {
+        System.setProperty("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+
+        // 1. 触发执行真实的 FinancialReporterJob main 入口
+        FinancialReporterJob.main(new String[]{"--period", "DAILY", "--date", "2026-10-08"});
+
+        // 2. 物理校验 dev 湖仓表落盘记录
+        try (JdbcCatalog catalog = IcebergCatalogFactory.createJdbcCatalog()) {
+            TableIdentifier tableId = TableIdentifier.of("finance_dev", "ads_financial_reports");
+            assertTrue(catalog.tableExists(tableId), "dev 环境表 ads_financial_reports 必须存在");
+
+            Table table = catalog.loadTable(tableId);
+            boolean foundTargetReport = false;
+            String expectedReportId = "report_daily_2026-10-08";
+
+            try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+                for (Record r : records) {
+                    String repId = r.get(0, String.class);
+                    if (expectedReportId.equals(repId)) {
+                        foundTargetReport = true;
+                        System.out.println("================================================================================");
+                        System.out.printf("🎉 [2026-10-08 Verification] 10月8日财务研报落盘与发送校验成功:\n");
+                        System.out.printf("  • report_id    : %s\n", repId);
+                        System.out.printf("  • period_value : %s\n", r.get(2, String.class));
+                        System.out.printf("  • report_date  : %s\n", r.get(3, Object.class));
+                        System.out.printf("  • net_expense  : ￥%s\n", r.get(6, Object.class));
+                        System.out.printf("  • chart_url    : %s\n", r.get(12, String.class));
+                        System.out.printf("  • slack_status : %s\n", r.get(13, String.class));
+                        System.out.printf("  • metrics_json : %s\n", r.get(10, String.class));
+                        System.out.println("--------------------------------------------------------------------------------");
+                        System.out.println("📄 研报全文内容 (Summary Text):");
+                        System.out.println(r.get(11, String.class));
+                        System.out.println("================================================================================");
+                        assertEquals("SENT", r.get(13, String.class), "Slack 推送状态必须为 SENT");
+                        assertNotNull(r.get(12, String.class), "QuickChart 短链不可为空");
+                        assertNotNull(r.get(6, Object.class), "落盘的 net_expense 不可为 null");
+                        assertEquals(new BigDecimal("671.65"), r.get(6, BigDecimal.class), "落盘的净支出必须与宏观对齐为 ￥671.65");
+                    }
+                }
+            }
+            assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
+        }
+    }
 }
