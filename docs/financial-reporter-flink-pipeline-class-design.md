@@ -97,11 +97,41 @@ classDiagram
         +postReportWithBlocks(String) boolean
     }
 
+    class FinancialReportRecord {
+        -String reportId
+        -String periodType
+        -String periodValue
+        -LocalDate reportDate
+        -BigDecimal totalExpense
+        -BigDecimal totalRefund
+        -BigDecimal netExpense
+        -BigDecimal totalIncome
+        -BigDecimal totalTransfer
+        -Long txCount
+        -String metricsJson
+        -String summaryText
+        -String chartUrl
+        -String slackStatus
+        -Instant createdAt
+    }
+
+    class ReportRecordToRowDataMapper {
+        +map(FinancialReportRecord record) RowData
+    }
+
+    class IcebergR2Sink {
+        +fromConfig(targetTable, equalityColumn)$ IcebergR2Sink
+        +append(DataStream~RowData~) DataStreamSink
+    }
+
     FinancialReporterJob ..> FinancialReporterPipeline : 构造并调用 build()
     FinancialReporterPipeline --> FinancialReportBroadcastProcessFunction : 注册为核心算子
     FinancialReportBroadcastProcessFunction ..> FinancialReportContext : 打包汇聚数据胶囊
     FinancialReportBroadcastProcessFunction --> FinancialAdvisorAgent : 调用驱动研报生成
     FinancialReportBroadcastProcessFunction --> SlackYuiClient : 联动原生富媒体卡片投递
+    FinancialReportBroadcastProcessFunction ..> FinancialReportRecord : 组装持久化实体
+    FinancialReporterPipeline --> IcebergR2Sink : 挂载 Flink 原生 Iceberg 写端 (写入 ads_financial_reports)
+    IcebergR2Sink ..> ReportRecordToRowDataMapper : 映射为 RowData 列式存储
 ```
 
 ---
@@ -182,16 +212,24 @@ public SingleOutputStreamOperator<String> build(StreamExecutionEnvironment env) 
             .uid("micro-dwd-source");
 
     // 3. 双流连接汇聚并强制锁定单例并行度 (Parallelism = 1)
-    SingleOutputStreamOperator<String> reportStream = microStream
+    SingleOutputStreamOperator<FinancialReportRecord> reportStream = microStream
             .connect(broadcastMacroStream)
             .process(reportProcessFunction)
             .name("FinancialReport-Broadcast-ProcessFunction")
             .uid("financial-report-process")
             .setParallelism(1);
 
-    // 4. (可选) 挂载输出 Sink (如落盘或写入报表审计表)
+    // 4. 挂载 Flink 原生 Iceberg 写端 (写入 ads_financial_reports 物理持久化表)
+    // 严格遵循工程 Lakehouse 原生规范：复用 IcebergR2Sink + ReportRecordToRowDataMapper
     if (sink != null) {
         reportStream.sinkTo(sink).name("FinancialReport-Sink").uid("financial-report-sink");
+    } else {
+        IcebergR2Sink adsSink = IcebergR2Sink.fromConfig("ads_financial_reports", "report_id");
+        DataStream<RowData> rowStream = reportStream
+                .map(new ReportRecordToRowDataMapper())
+                .name("ReportRecord-To-RowData")
+                .uid("report-to-rowdata");
+        adsSink.append(rowStream);
     }
 
     return reportStream;
@@ -248,4 +286,5 @@ public SingleOutputStreamOperator<String> build(StreamExecutionEnvironment env) 
 
 1. **零数据库穿透压力**：算子内部无任何数据库连接池或 DAO 调用，避免高并发下打崩 Trino 或 Iceberg 元数据。
 2. **零大模型数字幻觉**：宏观指标来自已平账的 DWS 视图，微观明细来自真实 DWD 流水，由 Flink 算子打包为完整上下文喂给 Agent，模型只做推理分析与可视化调用，绝无伪造数据的空间。
-3. **符合企业级规范**：完全对齐项目中 `SmsGmailR2Pipeline` 与 `SmsOdsToDwdPipeline` 的命名与职责规范，代码整洁一致。
+3. **原生 Lakehouse 持久化闭环**：研报分析成果不走临时 JDBC 插入，而是通过 Flink 原生 `IcebergR2Sink` 以 Parquet 列存格式直接写入 Cloudflare R2 上的 `ads_financial_reports` 物理事实表，天然拥有 V2 Equality Delete Upsert 与版本快照管理能力。
+4. **符合企业级规范**：完全对齐项目中 `SmsGmailR2Pipeline` 与 `SmsOdsToDwdPipeline` 的命名与职责规范，代码整洁一致。

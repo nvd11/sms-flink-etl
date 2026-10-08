@@ -173,6 +173,7 @@
 ### 4.3 ADS 应用层：智能财务报告持久化事实表 (Financial Reports Fact Table)
 * **目标实体**：`iceberg.finance.ads_financial_reports` (生产) / `iceberg.finance_dev.ads_financial_reports` (测试)
 * **业务定位**：持久化归档每一次由 Flink 批处理驱动 LLM 产出的指标快照、点评文字与图表短链，建立永久有据可查的个人财务数字资产。
+* **写入管道**：**严格遵循 Flink 原生 Lakehouse 规范**。由 `FinancialReporterPipeline` 下游直接挂载 `IcebergR2Sink`，配合 `ReportRecordToRowDataMapper` 以 Parquet 列存格式直接写入 Cloudflare R2，实现原生 Equality Delete Upsert 与 Snapshot 事务提交。
 
 #### 字段规格：
 | 字段名 | 物理类型 | 说明与示例 |

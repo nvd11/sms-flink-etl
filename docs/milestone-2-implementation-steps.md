@@ -125,12 +125,12 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 
 ---
 
-### 步骤 2.7：编写 Flink 流水线编排实体 (`FinancialReporterPipeline`)
+### 步骤 2.7：编写 Flink 流水线编排实体与 Iceberg 原生落盘写端 (`FinancialReporterPipeline`)
 * **包路径**：`com.finance.etl.pipeline.FinancialReporterPipeline`
 * **职责**：遵循整洁架构与依赖倒置原则 (DIP)，严格对标 `SmsOdsToDwdPipeline` 范式。
   * 接收外部注入的 `Source<DwsSummaryRecord, ?, ?>`（宏观流源）与 `Source<FinancialTransaction, ?, ?>`（微观流源）；
   * 编排 `microStream.connect(macroBroadcastStream).process(reportFunction).setParallelism(1)` 数据流拓扑；
-  * 提供可插拔的 Sink 输出挂载能力（支持 Mock 输出与真实投递验证）。
+  * **挂载 Flink 原生 Iceberg 物理持久化写端**：直接复用 `IcebergR2Sink.fromConfig("ads_financial_reports", "report_id")`，结合 `ReportRecordToRowDataMapper` 将研报全量事实以 Parquet 列存格式直接写入 Cloudflare R2，实现原生 Equality Delete Upsert 与 Snapshot 事务提交。
 
 ---
 
@@ -142,7 +142,8 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 2. **端到端集成测试与实盘报告验收 (`FinancialAdvisorAgentTest.java` & `FinancialReporterPipelineTest.java`)**：
    * **用例 1 (双流上下文驱动报告生成)**：给 Agent 传入封装好 9 月宏观指标与微观明细的 `FinancialReportContext`，验证大模型自主调用 `createCategoryPieChart` 与 `createMerchantBarChart` 生成短链；
    * **用例 2 (金额真实性与平账验证)**：断言 Agent 生成的研报中，净支出（`22443.56`）、理赔（`2790.59`）与明细案例金额完全严丝合缝；
-   * **用例 3 (Slack 卡片交付验收)**：断言生成的 Block Kit 卡片可成功投递且图片短链在客户端直接渲染显示。
+   * **用例 3 (Slack 卡片交付验收)**：断言生成的 Block Kit 卡片可成功投递且图片短链在客户端直接渲染显示；
+   * **用例 4 (湖仓物理落盘验证)**：断言研报成功写入 `iceberg.finance_dev.ads_financial_reports`，Trino 可秒级查出完整归档。
 
 ---
 
@@ -152,13 +153,15 @@ M2 的核心使命是**为冰冷的数据注入智能的大脑与温存的人设
 | :--- | :--- | :--- | :--- |
 | `com.finance.etl.model.FinancialChatModelFactory` | 模型工厂 | LangChain4j OpenAi | 统一注入 LiteLLM 与 Gemini 3.8 Flash |
 | `com.finance.etl.model.FinancialReportContext` | 领域模型 | Lombok / POJO | 承载双流汇聚后的宏观指标与微观明细 |
+| `com.finance.etl.model.FinancialReportRecord` | 湖仓实体模型 | Lombok / POJO | 对应 `ads_financial_reports` 物理表字段规格 |
 | `com.finance.etl.client.QuickChartClient` | 外部服务客户端 | JDK 21 HttpClient | 负责 POST 交换图表短链 |
 | `com.finance.etl.client.SlackYuiClient` | 外部服务客户端 | JDK 21 HttpClient | 负责向主人 Slack 推送 Block Kit 原生图片卡片 |
 | `com.finance.etl.tools.FinancialChartTools` | Agent 武器库 | `QuickChartClient` | 暴露画图能力 (`@Tool`) |
 | `com.finance.etl.service.FinancialAdvisorService` | 声明式 AI 契约 | LangChain4j 注解 | 锁定 Yui 秘书人设与零幻觉红线 |
 | `com.finance.etl.agent.FinancialAdvisorAgent` | 智能体实体本体 | `AiServices` | 提供 `fromConfig()` 与一键分析接口 |
 | `com.finance.etl.transform.report.FinancialReportBroadcastProcessFunction` | Flink 算子 | Flink Streaming API | 负责双流广播汇聚与上下文打包 (P=1) |
-| `com.finance.etl.pipeline.FinancialReporterPipeline` | Flink 拓扑编排 | Flink DataStream API | 规范化双流流图编排 (DIP 原则) |
+| `com.finance.etl.sink.iceberg.ReportRecordToRowDataMapper` | Flink 转换算子 | Flink Table API | 将研报实体映射为 Flink RowData 列式数据 |
+| `com.finance.etl.pipeline.FinancialReporterPipeline` | Flink 拓扑编排 | Flink DataStream API | 规范化双流流图编排并挂载 `IcebergR2Sink` |
 | `com.finance.etl.jobs.FinancialReporterJob` | Flink 批作业 | Flink Batch Pipeline | 统一入口，挂载双流并执行端到端闭环 |
 
 ---
