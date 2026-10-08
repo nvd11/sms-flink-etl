@@ -15,6 +15,7 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -70,6 +71,8 @@ public class FinancialReportBroadcastProcessFunction
     private transient SlackYuiClient slackClient;
     private transient List<FinancialTransaction> microTransactionsBuffer;
     private transient int receivedMicroCount;
+    private transient DwsSummaryRecord latestMacroSummary;
+    private transient boolean reportGenerated;
 
     public FinancialReportBroadcastProcessFunction(String periodType, String periodValue) {
         this(periodType, periodValue, true, 0);
@@ -97,6 +100,8 @@ public class FinancialReportBroadcastProcessFunction
         this.slackClient = SlackYuiClient.fromConfig();
         this.microTransactionsBuffer = new ArrayList<>();
         this.receivedMicroCount = 0;
+        this.latestMacroSummary = null;
+        this.reportGenerated = false;
     }
 
     /**
@@ -117,12 +122,19 @@ public class FinancialReportBroadcastProcessFunction
 
     @Override
     public void processElement(FinancialTransaction transaction,
-                               ReadOnlyContext ctx,
-                               Collector<FinancialReportRecord> out) throws Exception {
+                                ReadOnlyContext ctx,
+                                Collector<FinancialReportRecord> out) throws Exception {
         if (transaction != null) {
             // 🎯 核心存入点：将 microStream 管道中流经的每一笔真实刷卡事实明细一笔不漏地收集至内存缓冲列表
             microTransactionsBuffer.add(transaction);
             receivedMicroCount++;
+        }
+
+        // 防御性同步：若当前尚未拿到宏观指标，尝试从只读广播状态中获取
+        if (this.latestMacroSummary == null) {
+            try {
+                this.latestMacroSummary = ctx.getBroadcastState(MACRO_STATE_DESCRIPTOR).get(periodValue);
+            } catch (Exception ignored) {}
         }
 
         // 🎯 关键修复：当预期记录数达到或为最后一笔时，立即在 processElement 内部唤起研报生成并正式 collect 发射给下游 Sink
@@ -156,6 +168,7 @@ public class FinancialReportBroadcastProcessFunction
         if (macroRecord != null) {
             LOG.info("📢 [Report Broadcast Function] Received macro DWS summary: statDate={}, netExpense={}, count={}",
                     macroRecord.getStatDate(), macroRecord.getNetExpense(), macroRecord.getTxCount());
+            this.latestMacroSummary = macroRecord;
             // 🎯 真正的物理入库动作：将 1 行 DWS 宏观平账大盘写入受 Flink Checkpoint/Savepoint 托管的全局只读内存镜像中
             ctx.getBroadcastState(MACRO_STATE_DESCRIPTOR).put(periodValue, macroRecord);
         }
@@ -163,9 +176,9 @@ public class FinancialReportBroadcastProcessFunction
 
     @Override
     public void close() throws Exception {
-        LOG.info("🏁 [Report Broadcast Function] Closing batch stream. Triggering AI report generation...");
-        if (agent != null && microTransactionsBuffer != null) {
-            // 批处理结束时，若尚未发射则执行组装
+        LOG.info("🏁 [Report Broadcast Function] Closing batch stream...");
+        if (agent != null && microTransactionsBuffer != null && !reportGenerated) {
+            // 批处理结束时，若尚未在 processElement 中发射则执行保底生成
             triggerReportGeneration();
         }
         super.close();
@@ -175,13 +188,21 @@ public class FinancialReportBroadcastProcessFunction
      * 手动或结束时触发生成研报与发送，并输出结构化落盘实体
      */
     public FinancialReportRecord triggerReportGeneration() {
+        if (reportGenerated) {
+            LOG.info("ℹ️ [Report Broadcast Function] Report already generated and emitted, skipping duplicate call.");
+            return null;
+        }
+        reportGenerated = true;
+
         LOG.info("🚀 [Report Broadcast Function] Assembling FinancialReportContext for period={}:{} with {} raw transactions",
                 periodType, periodValue, microTransactionsBuffer.size());
 
-        // 构造宏观备底或回退大盘
-        DwsSummaryRecord macroSummary = new DwsSummaryRecord();
-        macroSummary.setPeriodType(periodType);
-        macroSummary.setPeriodValue(periodValue);
+        // 🎯 核心修复：优先取广播流送达的真实宏观 DWS 指标；若极端情况下为空，自适应从微观交易明细合成保底大盘
+        DwsSummaryRecord macroSummary = this.latestMacroSummary;
+        if (macroSummary == null) {
+            LOG.warn("⚠️ [Report Broadcast Function] No macro summary received from broadcast stream, synthesizing fallback summary from micro buffer.");
+            macroSummary = synthesizeFallbackSummary();
+        }
 
         FinancialReportContext context = new FinancialReportContext(
                 periodType,
@@ -231,13 +252,104 @@ public class FinancialReportBroadcastProcessFunction
         record.setNetExpense(macroSummary.getNetExpense());
         record.setTotalIncome(macroSummary.getTotalIncome());
         record.setTotalTransfer(macroSummary.getTotalTransfer());
-        record.setTxCount((long) microTransactionsBuffer.size());
+        record.setTxCount(macroSummary.getTxCount() != null ? macroSummary.getTxCount() : (long) microTransactionsBuffer.size());
+        record.setMetricsJson(macroSummary.toJson());
         record.setSummaryText(report);
         record.setChartUrl(chartUrl);
         record.setSlackStatus(slackStatus);
         record.setCreatedAt(Instant.now());
 
         return record;
+    }
+
+    /**
+     * 当广播宏观流因极端时序未达时，自适应从微观交易流明细合成宏观大盘，彻底杜绝指标为 0 幻觉
+     */
+    private DwsSummaryRecord synthesizeFallbackSummary() {
+        BigDecimal totalExpense = BigDecimal.ZERO;
+        BigDecimal totalRefund = BigDecimal.ZERO;
+        BigDecimal totalIncome = BigDecimal.ZERO;
+        BigDecimal totalTransfer = BigDecimal.ZERO;
+        BigDecimal foodExpense = BigDecimal.ZERO;
+        BigDecimal transportExpense = BigDecimal.ZERO;
+        BigDecimal onlineShoppingExpense = BigDecimal.ZERO;
+        BigDecimal offlineShoppingExpense = BigDecimal.ZERO;
+        BigDecimal medicalExpense = BigDecimal.ZERO;
+        BigDecimal communicationExpense = BigDecimal.ZERO;
+        BigDecimal insuranceExpense = BigDecimal.ZERO;
+        BigDecimal propertyExpense = BigDecimal.ZERO;
+        BigDecimal travelExpense = BigDecimal.ZERO;
+        BigDecimal personalTransferExpense = BigDecimal.ZERO;
+        BigDecimal otherExpense = BigDecimal.ZERO;
+
+        for (FinancialTransaction tx : microTransactionsBuffer) {
+            BigDecimal amt = tx.getAmount() != null ? tx.getAmount() : BigDecimal.ZERO;
+            String type = tx.getTxType() != null ? tx.getTxType().toUpperCase() : "EXPENSE";
+            String cat = tx.getCategory() != null ? tx.getCategory().toUpperCase() : "OTHER";
+
+            switch (type) {
+                case "EXPENSE" -> {
+                    totalExpense = totalExpense.add(amt);
+                    switch (cat) {
+                        case "FOOD" -> foodExpense = foodExpense.add(amt);
+                        case "TRANSPORT" -> transportExpense = transportExpense.add(amt);
+                        case "ONLINE_SHOPPING" -> onlineShoppingExpense = onlineShoppingExpense.add(amt);
+                        case "OFFLINE_SHOPPING" -> offlineShoppingExpense = offlineShoppingExpense.add(amt);
+                        case "MEDICAL" -> medicalExpense = medicalExpense.add(amt);
+                        case "COMMUNICATION" -> communicationExpense = communicationExpense.add(amt);
+                        case "INSURANCE" -> insuranceExpense = insuranceExpense.add(amt);
+                        case "PROPERTY_MANAGEMENT" -> propertyExpense = propertyExpense.add(amt);
+                        case "TRAVEL" -> travelExpense = travelExpense.add(amt);
+                        case "PERSONAL_TRANSFER" -> personalTransferExpense = personalTransferExpense.add(amt);
+                        default -> otherExpense = otherExpense.add(amt);
+                    }
+                }
+                case "REFUND" -> totalRefund = totalRefund.add(amt);
+                case "INCOME" -> totalIncome = totalIncome.add(amt);
+                case "TRANSFER" -> totalTransfer = totalTransfer.add(amt);
+                default -> totalExpense = totalExpense.add(amt);
+            }
+        }
+
+        BigDecimal netExpense = totalExpense.subtract(totalRefund);
+
+        LocalDate statDate = null;
+        if ("DAILY".equalsIgnoreCase(periodType)) {
+            try {
+                statDate = LocalDate.parse(periodValue);
+            } catch (Exception ignored) {}
+        }
+
+        return new DwsSummaryRecord(
+                periodType,
+                periodValue,
+                statDate,
+                null,
+                null,
+                (long) microTransactionsBuffer.size(),
+                totalExpense,
+                totalRefund,
+                netExpense,
+                totalIncome,
+                totalTransfer,
+                foodExpense,
+                transportExpense,
+                onlineShoppingExpense,
+                offlineShoppingExpense,
+                medicalExpense,
+                communicationExpense,
+                insuranceExpense,
+                propertyExpense,
+                travelExpense,
+                personalTransferExpense,
+                otherExpense,
+                null,
+                null
+        );
+    }
+
+    public void setLatestMacroSummary(DwsSummaryRecord latestMacroSummary) {
+        this.latestMacroSummary = latestMacroSummary;
     }
 
     public List<FinancialTransaction> getMicroTransactionsBuffer() {

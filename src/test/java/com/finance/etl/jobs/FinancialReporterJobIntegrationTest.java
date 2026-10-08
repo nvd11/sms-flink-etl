@@ -190,6 +190,8 @@ class FinancialReporterJobIntegrationTest {
                         System.out.println("================================================================================");
                         assertEquals("SENT", r.get(13, String.class), "真实执行下 Slack 推送状态必须为 SENT");
                         assertNotNull(r.get(12, String.class), "QuickChart 短链不可为空");
+                        assertNotNull(r.get(6, Object.class), "落盘的 net_expense 不可为 null");
+                        assertEquals(new BigDecimal("23.62"), r.get(6, BigDecimal.class), "落盘的净支出必须为 ￥23.62");
                     }
                 }
             }

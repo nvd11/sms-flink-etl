@@ -295,6 +295,31 @@ public class DwsSummaryRecord implements Serializable {
         return Objects.hash(periodType, periodValue, maxId);
     }
 
+    public String toJson() {
+        return String.format(
+                "{\"periodType\":\"%s\",\"periodValue\":\"%s\",\"txCount\":%s,\"totalExpense\":%s,\"totalRefund\":%s,\"netExpense\":%s,\"totalIncome\":%s,\"totalTransfer\":%s,\"foodExpense\":%s,\"transportExpense\":%s,\"onlineShoppingExpense\":%s,\"offlineShoppingExpense\":%s,\"medicalExpense\":%s,\"communicationExpense\":%s,\"insuranceExpense\":%s,\"propertyExpense\":%s,\"travelExpense\":%s,\"personalTransferExpense\":%s,\"otherExpense\":%s}",
+                periodType != null ? periodType : "",
+                periodValue != null ? periodValue : "",
+                txCount != null ? txCount : 0,
+                totalExpense != null ? totalExpense : 0,
+                totalRefund != null ? totalRefund : 0,
+                netExpense != null ? netExpense : 0,
+                totalIncome != null ? totalIncome : 0,
+                totalTransfer != null ? totalTransfer : 0,
+                foodExpense != null ? foodExpense : 0,
+                transportExpense != null ? transportExpense : 0,
+                onlineShoppingExpense != null ? onlineShoppingExpense : 0,
+                offlineShoppingExpense != null ? offlineShoppingExpense : 0,
+                medicalExpense != null ? medicalExpense : 0,
+                communicationExpense != null ? communicationExpense : 0,
+                insuranceExpense != null ? insuranceExpense : 0,
+                propertyExpense != null ? propertyExpense : 0,
+                travelExpense != null ? travelExpense : 0,
+                personalTransferExpense != null ? personalTransferExpense : 0,
+                otherExpense != null ? otherExpense : 0
+        );
+    }
+
     @Override
     public String toString() {
         return "DwsSummaryRecord{" +
