@@ -20,6 +20,47 @@ public class CheckAdsTableRowsHelper {
         checkSchema("finance_dev");
     }
 
+    public static void probeWeeklyAndMonthly(String schema) {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement()) {
+
+            System.out.println("================================================================================");
+            System.out.println("📅 [Probing Weekly View in " + schema + "]");
+            try (java.sql.ResultSet rs = stmt.executeQuery("SELECT * FROM iceberg." + schema + ".dws_financial_summary_weekly ORDER BY week_period DESC LIMIT 5")) {
+                java.sql.ResultSetMetaData md = rs.getMetaData();
+                int colCount = md.getColumnCount();
+                System.out.print("Columns: ");
+                for (int i = 1; i <= colCount; i++) System.out.print(md.getColumnName(i) + " ");
+                System.out.println();
+                while (rs.next()) {
+                    System.out.printf("  • Week: %s | TxCount: %s | NetExpense: ￥%s\n",
+                            rs.getString("week_period"), rs.getLong("tx_count"), rs.getBigDecimal("net_expense"));
+                }
+            }
+
+            System.out.println("--------------------------------------------------------------------------------");
+            System.out.println("📅 [Probing Monthly View in " + schema + "]");
+            try (java.sql.ResultSet rs = stmt.executeQuery("SELECT * FROM iceberg." + schema + ".dws_financial_summary_monthly ORDER BY stat_month DESC LIMIT 5")) {
+                java.sql.ResultSetMetaData md = rs.getMetaData();
+                int colCount = md.getColumnCount();
+                System.out.print("Columns: ");
+                for (int i = 1; i <= colCount; i++) System.out.print(md.getColumnName(i) + " ");
+                System.out.println();
+                while (rs.next()) {
+                    System.out.printf("  • Month: %s | TxCount: %s | NetExpense: ￥%s\n",
+                            rs.getString("stat_month"), rs.getLong("tx_count"), rs.getBigDecimal("net_expense_cny"));
+                }
+            }
+            System.out.println("================================================================================");
+        } catch (Exception e) {
+            LOG.error("❌ 探测失败: {}", e.getMessage(), e);
+        }
+    }
+
     public static void checkLakehouseDate(String dateStr) {
         try (com.finance.etl.repository.FinancialLakehouseRepository repo = com.finance.etl.repository.FinancialLakehouseRepository.fromConfig()) {
             java.time.LocalDate d = java.time.LocalDate.parse(dateStr);

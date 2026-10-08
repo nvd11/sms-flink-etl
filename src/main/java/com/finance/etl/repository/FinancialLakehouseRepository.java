@@ -169,14 +169,126 @@ public class FinancialLakehouseRepository implements AutoCloseable {
     }
 
     /**
-     * 1.2 查询指定月度大盘
+     * 1.2 动态从 Trino View 查询最新有动账支出的自然周大盘
+     */
+    public DwsSummaryRecord queryLatestActiveWeeklySummary() {
+        String sql = String.format("""
+                SELECT
+                    week_period, min_id, max_id, tx_count,
+                    total_expense, total_refund, net_expense, total_income,
+                    0.0 AS total_transfer,
+                    food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
+                    medical_expense, communication_expense, insurance_expense, property_expense,
+                    travel_expense, personal_transfer_expense, other_expense,
+                    null AS max_single_amount
+                FROM iceberg.%s.dws_financial_summary_weekly
+                WHERE tx_count > 0
+                ORDER BY week_period DESC
+                LIMIT 1
+                """, this.schema);
+
+        LOG.info("🔍 [Lakehouse Repo] Querying latest active weekly summary from iceberg.{}.dws_financial_summary_weekly...", this.schema);
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            if (rs.next()) {
+                return mapDwsSummaryRecord("WEEKLY", rs.getString("week_period"), rs);
+            }
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query latest weekly summary: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to query latest weekly summary from Trino", e);
+        }
+
+        return null;
+    }
+
+    /**
+     * 1.3 查询指定自然周大盘 (如 "2026-W41")
+     */
+    public DwsSummaryRecord queryWeeklySummary(String weekPeriod) {
+        Objects.requireNonNull(weekPeriod, "weekPeriod must not be null");
+        String sql = String.format("""
+                SELECT
+                    week_period, min_id, max_id, tx_count,
+                    total_expense, total_refund, net_expense, total_income,
+                    0.0 AS total_transfer,
+                    food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
+                    medical_expense, communication_expense, insurance_expense, property_expense,
+                    travel_expense, personal_transfer_expense, other_expense,
+                    null AS max_single_amount
+                FROM iceberg.%s.dws_financial_summary_weekly
+                WHERE week_period = '%s'
+                LIMIT 1
+                """, this.schema, weekPeriod);
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            if (rs.next()) {
+                return mapDwsSummaryRecord("WEEKLY", rs.getString("week_period"), rs);
+            }
+            return null;
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query weekly summary for {}: {}", weekPeriod, e.getMessage(), e);
+            throw new RuntimeException("Failed to query weekly summary from Trino", e);
+        }
+    }
+
+    /**
+     * 1.4 动态从 Trino View 查询最新有动账支出的月度大盘
+     */
+    public DwsSummaryRecord queryLatestActiveMonthlySummary() {
+        String sql = String.format("""
+                SELECT
+                    stat_month, min_id, max_id, tx_count,
+                    total_expense_cny AS total_expense,
+                    total_refund_cny AS total_refund,
+                    net_expense_cny AS net_expense,
+                    total_income_cny AS total_income,
+                    total_transfer_cny AS total_transfer,
+                    food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
+                    medical_expense, communication_expense, insurance_expense, property_expense,
+                    travel_expense, personal_transfer_expense, other_expense,
+                    max_single_amount
+                FROM iceberg.%s.dws_financial_summary_monthly
+                WHERE tx_count > 0
+                ORDER BY stat_month DESC
+                LIMIT 1
+                """, this.schema);
+
+        LOG.info("🔍 [Lakehouse Repo] Querying latest active monthly summary from iceberg.{}.dws_financial_summary_monthly...", this.schema);
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            if (rs.next()) {
+                return mapDwsSummaryRecord("MONTHLY", rs.getString("stat_month"), rs);
+            }
+        } catch (SQLException e) {
+            LOG.error("❌ [Lakehouse Repo] Failed to query latest monthly summary: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to query latest monthly summary from Trino", e);
+        }
+
+        return null;
+    }
+
+    /**
+     * 1.5 查询指定月度大盘 (如 "2026-10")
      */
     public DwsSummaryRecord queryMonthlySummary(String month) {
         Objects.requireNonNull(month, "month must not be null");
         String sql = String.format("""
                 SELECT
                     stat_month, min_id, max_id, tx_count,
-                    total_expense, total_refund, net_expense, total_income, total_transfer,
+                    total_expense_cny AS total_expense,
+                    total_refund_cny AS total_refund,
+                    net_expense_cny AS net_expense,
+                    total_income_cny AS total_income,
+                    total_transfer_cny AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
                     travel_expense, personal_transfer_expense, other_expense,
@@ -250,44 +362,63 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         LOG.info("🔍 [Lakehouse Repo] Querying all DWD transactions for date {} from iceberg.{}.dwd_financial_transactions...",
                 date, this.schema);
 
-        List<FinancialTransaction> list = new ArrayList<>();
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-
-            while (rs.next()) {
-                FinancialTransaction tx = new FinancialTransaction();
-                tx.setId(rs.getLong("id"));
-                tx.setRawRecordId(rs.getLong("raw_record_id"));
-                Timestamp ts = rs.getTimestamp("tx_time");
-                if (ts != null) {
-                    tx.setTxTime(ts.toInstant());
-                }
-                tx.setAmount(rs.getBigDecimal("amount"));
-                tx.setCurrency(rs.getString("currency"));
-                tx.setDirection(rs.getString("direction"));
-                tx.setTxType(rs.getString("tx_type"));
-                tx.setInstitution(rs.getString("institution"));
-                tx.setAccountType(rs.getString("account_type"));
-                tx.setCardTail(rs.getString("card_tail"));
-                tx.setPaymentChannel(rs.getString("payment_channel"));
-                tx.setCounterparty(rs.getString("counterparty"));
-                tx.setCleanedMerchant(rs.getString("cleaned_merchant"));
-                tx.setCategory(rs.getString("category"));
-                tx.setIsValidTx(rs.getBoolean("is_valid_tx"));
-                list.add(tx);
-            }
-        } catch (SQLException e) {
-            LOG.error("❌ [Lakehouse Repo] Failed to query all transactions for {}: {}", date, e.getMessage(), e);
-            throw new RuntimeException("Failed to query all transactions from Trino", e);
-        }
-
-        LOG.info("✅ [Lakehouse Repo] Retrieved {} raw transactions for date {}", list.size(), date);
-        return list;
+        return executeTransactionQuery(sql);
     }
 
     /**
-     * 2.1 查询指定月份周期内的全量 DWD 动账交易明细流水
+     * 2.1 查询指定自然周周期内的全量 DWD 动账交易明细流水 (如 "2026-W41")
+     */
+    public List<FinancialTransaction> queryWeeklyTransactions(String weekPeriod) {
+        Objects.requireNonNull(weekPeriod, "weekPeriod must not be null");
+
+        String rangeSql = String.format("""
+                SELECT week_start_date, week_end_date
+                FROM iceberg.%s.dws_financial_summary_weekly
+                WHERE week_period = '%s'
+                LIMIT 1
+                """, this.schema, weekPeriod);
+
+        LocalDate startDate = null;
+        LocalDate endDate = null;
+
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(rangeSql)) {
+            if (rs.next()) {
+                java.sql.Date s = rs.getDate("week_start_date");
+                java.sql.Date e = rs.getDate("week_end_date");
+                if (s != null) startDate = s.toLocalDate();
+                if (e != null) endDate = e.toLocalDate();
+            }
+        } catch (SQLException e) {
+            LOG.warn("Could not query week range for {}: {}", weekPeriod, e.getMessage());
+        }
+
+        String filterClause;
+        if (startDate != null && endDate != null) {
+            filterClause = String.format("date(tx_time) >= DATE '%s' AND date(tx_time) <= DATE '%s'", startDate, endDate);
+        } else {
+            filterClause = String.format("concat(cast(year_of_week(tx_time) as varchar), '-W', lpad(cast(week(tx_time) as varchar), 2, '0')) = '%s'", weekPeriod);
+        }
+
+        String sql = String.format("""
+                SELECT id, raw_record_id, tx_time, amount, currency, direction, tx_type,
+                       institution, account_type, card_tail, payment_channel,
+                       counterparty, cleaned_merchant, category, is_valid_tx, etl_created_at
+                FROM iceberg.%s.dwd_financial_transactions
+                WHERE %s
+                  AND is_valid_tx = true
+                ORDER BY tx_time ASC
+                """, this.schema, filterClause);
+
+        LOG.info("🔍 [Lakehouse Repo] Querying all DWD transactions for week {} from iceberg.{}.dwd_financial_transactions...",
+                weekPeriod, this.schema);
+
+        return executeTransactionQuery(sql);
+    }
+
+    /**
+     * 2.2 查询指定月份周期内的全量 DWD 动账交易明细流水 (如 "2026-10")
      */
     public List<FinancialTransaction> queryMonthlyTransactions(String month) {
         Objects.requireNonNull(month, "month must not be null");
@@ -297,7 +428,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                        institution, account_type, card_tail, payment_channel,
                        counterparty, cleaned_merchant, category, is_valid_tx, etl_created_at
                 FROM iceberg.%s.dwd_financial_transactions
-                WHERE format_datetime(tx_time, 'yyyy-MM') = '%s'
+                WHERE date_format(tx_time, '%%Y-%%m') = '%s'
                   AND is_valid_tx = true
                 ORDER BY tx_time ASC
                 """, this.schema, month);
@@ -305,6 +436,10 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         LOG.info("🔍 [Lakehouse Repo] Querying all DWD transactions for month {} from iceberg.{}.dwd_financial_transactions...",
                 month, this.schema);
 
+        return executeTransactionQuery(sql);
+    }
+
+    private List<FinancialTransaction> executeTransactionQuery(String sql) {
         List<FinancialTransaction> list = new ArrayList<>();
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
@@ -333,11 +468,11 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                 list.add(tx);
             }
         } catch (SQLException e) {
-            LOG.error("❌ [Lakehouse Repo] Failed to query all transactions for month {}: {}", month, e.getMessage(), e);
-            throw new RuntimeException("Failed to query monthly transactions from Trino", e);
+            LOG.error("❌ [Lakehouse Repo] Failed to execute transaction query: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to query transactions from Trino", e);
         }
 
-        LOG.info("✅ [Lakehouse Repo] Retrieved {} raw transactions for month {}", list.size(), month);
+        LOG.info("✅ [Lakehouse Repo] Retrieved {} raw transactions", list.size());
         return list;
     }
 

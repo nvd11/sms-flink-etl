@@ -244,4 +244,140 @@ class FinancialReporterJobIntegrationTest {
             assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
         }
     }
+
+    @Test
+    @DisplayName("实盘触发：在 dev 环境针对真实自然周 (WEEKLY) 执行完整流水线并验证研报生成、Slack 发送与 Iceberg 落盘")
+    void testRealLivePipelineWeeklyFromLakehouse() throws Exception {
+        System.setProperty("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+
+        // 1. 动态从 Trino View 探测 finance_dev 最新有动账支出的自然周
+        DwsSummaryRecord latestWeeklyMacro;
+        List<FinancialTransaction> weeklyTransactions;
+
+        try (FinancialLakehouseRepository repo = FinancialLakehouseRepository.fromConfig()) {
+            latestWeeklyMacro = repo.queryLatestActiveWeeklySummary();
+            assertNotNull(latestWeeklyMacro, "dev 数据库 View 中必须能查出最新的周度大盘记录");
+            assertNotNull(latestWeeklyMacro.getPeriodValue(), "周度标识 (如 2026-W41) 不可为空");
+
+            weeklyTransactions = repo.queryWeeklyTransactions(latestWeeklyMacro.getPeriodValue());
+            assertFalse(weeklyTransactions.isEmpty(), "最新周度下的真实 DWD 动账交易明细不可为空");
+        }
+
+        String periodType = "WEEKLY";
+        String periodValue = latestWeeklyMacro.getPeriodValue();
+
+        System.out.println("================================================================================");
+        System.out.printf("🚀 [Weekly Live Pipeline Test] 正在针对 dev 库最新自然周 (%s) 启动完整 Flink 双流批处理流水线...\n", periodValue);
+        System.out.printf("  • 周度宏观净支出基准: ￥%s (笔数: %d)\n", latestWeeklyMacro.getNetExpense(), latestWeeklyMacro.getTxCount());
+        System.out.printf("  • 周度微观真实流水数: %d 笔 (将全量装箱送入算子缓冲区)\n", weeklyTransactions.size());
+        System.out.println("================================================================================");
+
+        // 2. 触发执行真实的 FinancialReporterJob
+        FinancialReporterJob.main(new String[]{"--period", periodType, "--week", periodValue});
+
+        // 3. 物理校验 dev 湖仓表落盘记录
+        try (JdbcCatalog catalog = IcebergCatalogFactory.createJdbcCatalog()) {
+            TableIdentifier tableId = TableIdentifier.of("finance_dev", "ads_financial_reports");
+            assertTrue(catalog.tableExists(tableId), "dev 环境表 ads_financial_reports 必须存在");
+
+            Table table = catalog.loadTable(tableId);
+            boolean foundTargetReport = false;
+            String expectedReportId = String.format("report_weekly_%s", periodValue);
+
+            try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+                for (Record r : records) {
+                    String repId = r.get(0, String.class);
+                    if (expectedReportId.equals(repId)) {
+                        foundTargetReport = true;
+                        System.out.println("================================================================================");
+                        System.out.printf("🎉 [Weekly Verification] 周度财务研报落盘与发送校验成功:\n");
+                        System.out.printf("  • report_id    : %s\n", repId);
+                        System.out.printf("  • period_value : %s\n", r.get(2, String.class));
+                        System.out.printf("  • report_date  : %s\n", r.get(3, Object.class));
+                        System.out.printf("  • net_expense  : ￥%s\n", r.get(6, Object.class));
+                        System.out.printf("  • chart_url    : %s\n", r.get(12, String.class));
+                        System.out.printf("  • slack_status : %s\n", r.get(13, String.class));
+                        System.out.printf("  • metrics_json : %s\n", r.get(10, String.class));
+                        System.out.println("--------------------------------------------------------------------------------");
+                        System.out.println("📄 周度研报全文内容 (Weekly Summary Text):");
+                        System.out.println(r.get(11, String.class));
+                        System.out.println("================================================================================");
+                        assertEquals("SENT", r.get(13, String.class), "周度 Slack 推送状态必须为 SENT");
+                        assertNotNull(r.get(12, String.class), "QuickChart 短链不可为空");
+                        assertNotNull(r.get(6, Object.class), "周度落盘的 net_expense 不可为 null");
+                        assertEquals(latestWeeklyMacro.getNetExpense(), r.get(6, BigDecimal.class), "落盘的净支出必须与周度大盘对齐");
+                    }
+                }
+            }
+            assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
+        }
+    }
+
+    @Test
+    @DisplayName("实盘触发：在 dev 环境针对真实自然月 (MONTHLY) 执行完整流水线并验证研报生成、Slack 发送与 Iceberg 落盘")
+    void testRealLivePipelineMonthlyFromLakehouse() throws Exception {
+        System.setProperty("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+
+        // 1. 动态从 Trino View 探测 finance_dev 最新有动账支出的月份
+        DwsSummaryRecord latestMonthlyMacro;
+        List<FinancialTransaction> monthlyTransactions;
+
+        try (FinancialLakehouseRepository repo = FinancialLakehouseRepository.fromConfig()) {
+            latestMonthlyMacro = repo.queryLatestActiveMonthlySummary();
+            assertNotNull(latestMonthlyMacro, "dev 数据库 View 中必须能查出最新的月度大盘记录");
+            assertNotNull(latestMonthlyMacro.getPeriodValue(), "月度标识 (如 2026-10) 不可为空");
+
+            monthlyTransactions = repo.queryMonthlyTransactions(latestMonthlyMacro.getPeriodValue());
+            assertFalse(monthlyTransactions.isEmpty(), "最新月度下的真实 DWD 动账交易明细不可为空");
+        }
+
+        String periodType = "MONTHLY";
+        String periodValue = latestMonthlyMacro.getPeriodValue();
+
+        System.out.println("================================================================================");
+        System.out.printf("🚀 [Monthly Live Pipeline Test] 正在针对 dev 库最新自然月 (%s) 启动完整 Flink 双流批处理流水线...\n", periodValue);
+        System.out.printf("  • 月度宏观净支出基准: ￥%s (笔数: %d)\n", latestMonthlyMacro.getNetExpense(), latestMonthlyMacro.getTxCount());
+        System.out.printf("  • 月度微观真实流水数: %d 笔 (将全量装箱送入算子缓冲区)\n", monthlyTransactions.size());
+        System.out.println("================================================================================");
+
+        // 2. 触发执行真实的 FinancialReporterJob
+        FinancialReporterJob.main(new String[]{"--period", periodType, "--month", periodValue});
+
+        // 3. 物理校验 dev 湖仓表落盘记录
+        try (JdbcCatalog catalog = IcebergCatalogFactory.createJdbcCatalog()) {
+            TableIdentifier tableId = TableIdentifier.of("finance_dev", "ads_financial_reports");
+            assertTrue(catalog.tableExists(tableId), "dev 环境表 ads_financial_reports 必须存在");
+
+            Table table = catalog.loadTable(tableId);
+            boolean foundTargetReport = false;
+            String expectedReportId = String.format("report_monthly_%s", periodValue);
+
+            try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+                for (Record r : records) {
+                    String repId = r.get(0, String.class);
+                    if (expectedReportId.equals(repId)) {
+                        foundTargetReport = true;
+                        System.out.println("================================================================================");
+                        System.out.printf("🎉 [Monthly Verification] 月度财务研报落盘与发送校验成功:\n");
+                        System.out.printf("  • report_id    : %s\n", repId);
+                        System.out.printf("  • period_value : %s\n", r.get(2, String.class));
+                        System.out.printf("  • report_date  : %s\n", r.get(3, Object.class));
+                        System.out.printf("  • net_expense  : ￥%s\n", r.get(6, Object.class));
+                        System.out.printf("  • chart_url    : %s\n", r.get(12, String.class));
+                        System.out.printf("  • slack_status : %s\n", r.get(13, String.class));
+                        System.out.printf("  • metrics_json : %s\n", r.get(10, String.class));
+                        System.out.println("--------------------------------------------------------------------------------");
+                        System.out.println("📄 月度研报全文内容 (Monthly Summary Text):");
+                        System.out.println(r.get(11, String.class));
+                        System.out.println("================================================================================");
+                        assertEquals("SENT", r.get(13, String.class), "月度 Slack 推送状态必须为 SENT");
+                        assertNotNull(r.get(12, String.class), "QuickChart 短链不可为空");
+                        assertNotNull(r.get(6, Object.class), "月度落盘的 net_expense 不可为 null");
+                        assertEquals(latestMonthlyMacro.getNetExpense(), r.get(6, BigDecimal.class), "落盘的净支出必须与月度大盘对齐");
+                    }
+                }
+            }
+            assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
+        }
+    }
 }

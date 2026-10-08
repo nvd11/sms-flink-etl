@@ -48,6 +48,9 @@ public class FinancialReporterJob {
                 periodType = args[++i].toUpperCase();
             } else if ("--date".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
                 periodValue = args[++i];
+            } else if ("--week".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
+                periodType = "WEEKLY";
+                periodValue = args[++i];
             } else if ("--month".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
                 periodType = "MONTHLY";
                 periodValue = args[++i];
@@ -61,11 +64,30 @@ public class FinancialReporterJob {
         try (FinancialLakehouseRepository repo = FinancialLakehouseRepository.fromConfig()) {
             if ("MONTHLY".equalsIgnoreCase(periodType)) {
                 if (periodValue == null) {
-                    periodValue = "2026-09";
+                    macroRecord = repo.queryLatestActiveMonthlySummary();
+                    if (macroRecord != null && macroRecord.getPeriodValue() != null) {
+                        periodValue = macroRecord.getPeriodValue();
+                    } else {
+                        periodValue = "2026-10";
+                    }
+                } else {
+                    macroRecord = repo.queryMonthlySummary(periodValue);
                 }
                 LOG.info("🔍 [Job Query] Querying monthly macro summary for: {}", periodValue);
-                macroRecord = repo.queryMonthlySummary(periodValue);
                 microTransactions = repo.queryMonthlyTransactions(periodValue);
+            } else if ("WEEKLY".equalsIgnoreCase(periodType)) {
+                if (periodValue == null) {
+                    macroRecord = repo.queryLatestActiveWeeklySummary();
+                    if (macroRecord != null && macroRecord.getPeriodValue() != null) {
+                        periodValue = macroRecord.getPeriodValue();
+                    } else {
+                        periodValue = "2026-W41";
+                    }
+                } else {
+                    macroRecord = repo.queryWeeklySummary(periodValue);
+                }
+                LOG.info("🔍 [Job Query] Querying weekly macro summary for: {}", periodValue);
+                microTransactions = repo.queryWeeklyTransactions(periodValue);
             } else {
                 periodType = "DAILY";
                 if (periodValue == null) {

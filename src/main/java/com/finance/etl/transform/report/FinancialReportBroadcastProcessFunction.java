@@ -240,6 +240,15 @@ public class FinancialReportBroadcastProcessFunction
             try {
                 reportDate = LocalDate.parse(periodValue);
             } catch (Exception ignored) {}
+        } else if ("MONTHLY".equalsIgnoreCase(periodType)) {
+            try {
+                reportDate = LocalDate.parse(periodValue + "-01");
+            } catch (Exception ignored) {}
+        } else if ("WEEKLY".equalsIgnoreCase(periodType)) {
+            try {
+                java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ISO_WEEK_DATE;
+                reportDate = LocalDate.parse(periodValue + "-1", dtf);
+            } catch (Exception ignored) {}
         }
 
         FinancialReportRecord record = new FinancialReportRecord();
