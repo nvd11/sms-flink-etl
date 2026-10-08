@@ -64,30 +64,39 @@ public class FinancialReportBroadcastProcessFunction
      */
     private final String periodValue;
     private final boolean postToSlack;
+    private final int expectedMicroRecordCount; // 预期接收的主流微观记录总数，用于有界批处理精准触发发射
 
     private transient FinancialAdvisorAgent agent;
     private transient SlackYuiClient slackClient;
     private transient List<FinancialTransaction> microTransactionsBuffer;
+    private transient int receivedMicroCount;
 
     public FinancialReportBroadcastProcessFunction(String periodType, String periodValue) {
-        this(periodType, periodValue, true);
+        this(periodType, periodValue, true, 0);
     }
 
     public FinancialReportBroadcastProcessFunction(String periodType, String periodValue, boolean postToSlack) {
+        this(periodType, periodValue, postToSlack, 0);
+    }
+
+    public FinancialReportBroadcastProcessFunction(String periodType, String periodValue, boolean postToSlack, int expectedMicroRecordCount) {
         this.periodType = Objects.requireNonNull(periodType, "periodType must not be null");
         this.periodValue = Objects.requireNonNull(periodValue, "periodValue must not be null");
         this.postToSlack = postToSlack;
+        this.expectedMicroRecordCount = expectedMicroRecordCount;
         this.microTransactionsBuffer = new ArrayList<>();
+        this.receivedMicroCount = 0;
     }
 
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        LOG.info("⚡ [Report Broadcast Function] Initializing operator (period={}:{}, postSlack={})...",
-                periodType, periodValue, postToSlack);
+        LOG.info("⚡ [Report Broadcast Function] Initializing operator (period={}:{}, postSlack={}, expectedCount={})...",
+                periodType, periodValue, postToSlack, expectedMicroRecordCount);
         this.agent = FinancialAdvisorAgent.fromConfig();
         this.slackClient = SlackYuiClient.fromConfig();
         this.microTransactionsBuffer = new ArrayList<>();
+        this.receivedMicroCount = 0;
     }
 
     /**
@@ -97,9 +106,11 @@ public class FinancialReportBroadcastProcessFunction
      *   1) 来源绑定：由 FinancialReporterPipeline 中 microStream.connect(broadcastMacroStream) 显式声明；
      *      作为调用者的 microStream 走主管通道，其携带的每一笔 DWD 交易流水都会被 Flink 运行时自动分派至本方法；
      *   2) 装箱缓冲：内部通过 microTransactionsBuffer.add(transaction) 逐笔收拢入队，将整条流的数据完整收集；
-     * - 权限与执行策略：
-     *   1) 持有 ReadOnlyContext 受到编译期只读保护，禁止修改广播状态；
-     *   2) 将流经的微观流水全景缓冲至内存列表，用于批结束 (close/trigger) 时一次性整吞投喂给 AI 提炼代表作案例。
+     * - 结果发射时机 (Bug 根因与修复)：
+     *   在 Flink 生命周期中，close() 方法没有 Collector 参数，因此不能在 close() 中发射数据；
+     *   本算子在接收到最后一笔预期数据 (receivedMicroCount >= expectedMicroRecordCount) 时，
+     *   在持有 Collector<FinancialReportRecord> out 的本方法内立即触发研报生成，并通过 out.collect(record)
+     *   正式发射给下游挂载的 IcebergR2Sink，完成落盘与 Snapshot 提交！
      */
     private static final Pattern QUICKCHART_URL_PATTERN =
             Pattern.compile("(https?://quickchart\\.io/chart/render/[^\\s\\)\"]+)");
@@ -111,6 +122,17 @@ public class FinancialReportBroadcastProcessFunction
         if (transaction != null) {
             // 🎯 核心存入点：将 microStream 管道中流经的每一笔真实刷卡事实明细一笔不漏地收集至内存缓冲列表
             microTransactionsBuffer.add(transaction);
+            receivedMicroCount++;
+        }
+
+        // 🎯 关键修复：当预期记录数达到或为最后一笔时，立即在 processElement 内部唤起研报生成并正式 collect 发射给下游 Sink
+        if (expectedMicroRecordCount > 0 && receivedMicroCount >= expectedMicroRecordCount) {
+            LOG.info("🏁 [Report Broadcast Function] Reached expected micro count ({}/{}). Triggering report generation and collecting to downstream sink...",
+                    receivedMicroCount, expectedMicroRecordCount);
+            FinancialReportRecord record = triggerReportGeneration();
+            if (record != null) {
+                out.collect(record);
+            }
         }
     }
 

@@ -112,8 +112,9 @@ public class FinancialReporterJob {
         );
 
         // 5. 组装 Pipeline 拓扑并提交执行
+        // 传入 finalMicro.size() 作为 expectedMicroRecordCount，使算子在批处理最后一笔精准 collect 发射给下游 IcebergSink
         FinancialReportBroadcastProcessFunction reportFunction =
-                new FinancialReportBroadcastProcessFunction(periodType, periodValue, true);
+                new FinancialReportBroadcastProcessFunction(periodType, periodValue, true, finalMicro.size());
 
         FinancialReporterPipeline pipeline =
                 new FinancialReporterPipeline(macroSource, microSource, reportFunction);
