@@ -69,6 +69,13 @@ public class FinancialReportBroadcastProcessFunction
         this.microTransactionsBuffer = new ArrayList<>();
     }
 
+    /**
+     * 1. 主流事实交易处理入口 (processElement)
+     * 🎯 核心注解:
+     * - 当主流一条条真实的刷卡/支付流水流经本算子时触发；
+     * - 持有 ReadOnlyContext 受到编译期只读保护，禁止修改广播状态；
+     * - 将流经的微观流水全景缓冲至内存列表，用于批结束时一次性整吞投喂给 AI 提炼代表作案例。
+     */
     @Override
     public void processElement(FinancialTransaction transaction,
                                ReadOnlyContext ctx,
@@ -78,6 +85,14 @@ public class FinancialReportBroadcastProcessFunction
         }
     }
 
+    /**
+     * 2. 广播流宏观大盘处理入口 (processBroadcastElement)
+     * 🎯 核心注解:
+     * - Pipeline 中的 macroStream.broadcast(DESCRIPTOR) 仅仅是在【编译期/拓扑声明时】为这块状态划分了内存命名空间并建立广播连接通道；
+     * - 而真正将广播流流过来的宏观大盘实体【真正物理写入】Flink 受托管内存状态仓库的动作，正是发生在这里！
+     * - 持有独占写权限的 Context，通过 ctx.getBroadcastState(DESCRIPTOR).put(key, value) 将大盘平账真理源稳固持久化，
+     *   供集群内本节点随时安全访问与故障自愈。
+     */
     @Override
     public void processBroadcastElement(DwsSummaryRecord macroRecord,
                                         Context ctx,
@@ -85,6 +100,7 @@ public class FinancialReportBroadcastProcessFunction
         if (macroRecord != null) {
             LOG.info("📢 [Report Broadcast Function] Received macro DWS summary: statDate={}, netExpense={}, count={}",
                     macroRecord.getStatDate(), macroRecord.getNetExpense(), macroRecord.getTxCount());
+            // 🎯 真正的物理入库动作：将 1 行 DWS 宏观平账大盘写入受 Flink Checkpoint/Savepoint 托管的全局只读内存镜像中
             ctx.getBroadcastState(MACRO_STATE_DESCRIPTOR).put(periodValue, macroRecord);
         }
     }
