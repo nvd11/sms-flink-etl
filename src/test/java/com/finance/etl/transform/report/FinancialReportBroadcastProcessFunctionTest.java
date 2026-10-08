@@ -3,6 +3,7 @@ package com.finance.etl.transform.report;
 import com.finance.etl.agent.FinancialAdvisorAgent;
 import com.finance.etl.client.SlackYuiClient;
 import com.finance.etl.model.FinancialReportContext;
+import com.finance.etl.model.FinancialReportRecord;
 import com.finance.etl.model.FinancialTransaction;
 import com.finance.etl.service.FinancialAdvisorService;
 import org.junit.jupiter.api.DisplayName;
@@ -56,10 +57,10 @@ class FinancialReportBroadcastProcessFunctionTest {
         tx.setCategory("MEDICAL");
         func.getMicroTransactionsBuffer().add(tx);
 
-        String report = func.triggerReportGeneration();
+        FinancialReportRecord record = func.triggerReportGeneration();
 
-        assertNotNull(report);
-        assertEquals("Mock Daily Report Content", report);
+        assertNotNull(record);
+        assertEquals("Mock Daily Report Content", record.getSummaryText());
         assertTrue(agentCalled.get(), "Agent 必须被成功调用");
     }
 }

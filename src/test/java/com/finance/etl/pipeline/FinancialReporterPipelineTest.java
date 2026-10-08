@@ -57,7 +57,7 @@ class FinancialReporterPipelineTest {
         FinancialReporterPipeline pipeline =
                 new FinancialReporterPipeline(macroSource, microSource, function);
 
-        SingleOutputStreamOperator<String> stream = pipeline.build(env);
+        SingleOutputStreamOperator<com.finance.etl.model.FinancialReportRecord> stream = pipeline.build(env);
 
         assertNotNull(stream);
         assertNotNull(env.getExecutionPlan());

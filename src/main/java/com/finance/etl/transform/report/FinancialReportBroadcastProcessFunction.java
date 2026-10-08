@@ -4,6 +4,7 @@ import com.finance.etl.agent.FinancialAdvisorAgent;
 import com.finance.etl.client.SlackYuiClient;
 import com.finance.etl.model.DwsSummaryRecord;
 import com.finance.etl.model.FinancialReportContext;
+import com.finance.etl.model.FinancialReportRecord;
 import com.finance.etl.model.FinancialTransaction;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -14,9 +15,13 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 财务分析研报 Flink 双流广播汇聚算子 (FinancialReportBroadcastProcessFunction)
@@ -25,10 +30,11 @@ import java.util.Objects;
  * 2. 主流流式接收对应周期内的 DWD 微观事实动账流水；
  * 3. 强制全局单例执行 (Parallelism = 1)，保证上下文汇聚完整且消除多 Task 竞争；
  * 4. 批结束/触发时组装 FinancialReportContext，唤起 FinancialAdvisorAgent 生成 Markdown 研报；
- * 5. 联动 SlackYuiClient 进行 Slack Block Kit 原生富媒体图片卡片投递，同时向下游发射生成的研报文本。
+ * 5. 组装并向下游发射结构化 FinancialReportRecord 实体，支撑 Flink 原生 IcebergR2Sink 落盘到 ads_financial_reports 事实表；
+ * 6. 联动 SlackYuiClient 进行 Slack Block Kit 原生富媒体图片卡片投递。
  */
 public class FinancialReportBroadcastProcessFunction
-        extends BroadcastProcessFunction<FinancialTransaction, DwsSummaryRecord, String> {
+        extends BroadcastProcessFunction<FinancialTransaction, DwsSummaryRecord, FinancialReportRecord> {
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(FinancialReportBroadcastProcessFunction.class);
@@ -95,10 +101,13 @@ public class FinancialReportBroadcastProcessFunction
      *   1) 持有 ReadOnlyContext 受到编译期只读保护，禁止修改广播状态；
      *   2) 将流经的微观流水全景缓冲至内存列表，用于批结束 (close/trigger) 时一次性整吞投喂给 AI 提炼代表作案例。
      */
+    private static final Pattern QUICKCHART_URL_PATTERN =
+            Pattern.compile("(https?://quickchart\\.io/chart/render/[^\\s\\)\"]+)");
+
     @Override
     public void processElement(FinancialTransaction transaction,
                                ReadOnlyContext ctx,
-                               Collector<String> out) throws Exception {
+                               Collector<FinancialReportRecord> out) throws Exception {
         if (transaction != null) {
             // 🎯 核心存入点：将 microStream 管道中流经的每一笔真实刷卡事实明细一笔不漏地收集至内存缓冲列表
             microTransactionsBuffer.add(transaction);
@@ -121,7 +130,7 @@ public class FinancialReportBroadcastProcessFunction
     @Override
     public void processBroadcastElement(DwsSummaryRecord macroRecord,
                                         Context ctx,
-                                        Collector<String> out) throws Exception {
+                                        Collector<FinancialReportRecord> out) throws Exception {
         if (macroRecord != null) {
             LOG.info("📢 [Report Broadcast Function] Received macro DWS summary: statDate={}, netExpense={}, count={}",
                     macroRecord.getStatDate(), macroRecord.getNetExpense(), macroRecord.getTxCount());
@@ -133,9 +142,7 @@ public class FinancialReportBroadcastProcessFunction
     @Override
     public void close() throws Exception {
         LOG.info("🏁 [Report Broadcast Function] Closing batch stream. Triggering AI report generation...");
-        DwsSummaryRecord macroSummary = null;
         if (agent != null && microTransactionsBuffer != null) {
-            // 从缓冲或外部构造上下文
             // 批处理结束时，若尚未发射则执行组装
             triggerReportGeneration();
         }
@@ -143,15 +150,16 @@ public class FinancialReportBroadcastProcessFunction
     }
 
     /**
-     * 手动或结束时触发生成研报与发送
+     * 手动或结束时触发生成研报与发送，并输出结构化落盘实体
      */
-    public String triggerReportGeneration() {
+    public FinancialReportRecord triggerReportGeneration() {
         LOG.info("🚀 [Report Broadcast Function] Assembling FinancialReportContext for period={}:{} with {} raw transactions",
                 periodType, periodValue, microTransactionsBuffer.size());
 
-        // 构造宏观备底或回退大盘（若广播状态已在批模式结束）
+        // 构造宏观备底或回退大盘
         DwsSummaryRecord macroSummary = new DwsSummaryRecord();
-        macroSummary.setStatDate(null);
+        macroSummary.setPeriodType(periodType);
+        macroSummary.setPeriodValue(periodValue);
 
         FinancialReportContext context = new FinancialReportContext(
                 periodType,
@@ -164,13 +172,50 @@ public class FinancialReportBroadcastProcessFunction
         LOG.info("✅ [Report Broadcast Function] Financial report generated successfully (length: {} chars)",
                 report != null ? report.length() : 0);
 
+        String slackStatus = "SKIPPED";
         if (postToSlack && slackClient != null && report != null) {
             if (!slackClient.getBotToken().isEmpty() && !slackClient.getBotToken().startsWith("mock-")) {
                 LOG.info("📬 [Report Broadcast Function] Posting report with native image blocks to Slack...");
-                slackClient.postReportWithBlocks(report);
+                boolean ok = slackClient.postReportWithBlocks(report);
+                slackStatus = ok ? "SENT" : "FAILED";
             }
         }
-        return report;
+
+        // 提取生成的图表短链
+        String chartUrl = null;
+        if (report != null) {
+            Matcher m = QUICKCHART_URL_PATTERN.matcher(report);
+            if (m.find()) {
+                chartUrl = m.group(1);
+            }
+        }
+
+        // 组装落盘到 ads_financial_reports 的实体
+        String reportId = String.format("report_%s_%s", periodType.toLowerCase(), periodValue);
+        LocalDate reportDate = LocalDate.now();
+        if ("DAILY".equalsIgnoreCase(periodType)) {
+            try {
+                reportDate = LocalDate.parse(periodValue);
+            } catch (Exception ignored) {}
+        }
+
+        FinancialReportRecord record = new FinancialReportRecord();
+        record.setReportId(reportId);
+        record.setPeriodType(periodType);
+        record.setPeriodValue(periodValue);
+        record.setReportDate(reportDate);
+        record.setTotalExpense(macroSummary.getTotalExpense());
+        record.setTotalRefund(macroSummary.getTotalRefund());
+        record.setNetExpense(macroSummary.getNetExpense());
+        record.setTotalIncome(macroSummary.getTotalIncome());
+        record.setTotalTransfer(macroSummary.getTotalTransfer());
+        record.setTxCount((long) microTransactionsBuffer.size());
+        record.setSummaryText(report);
+        record.setChartUrl(chartUrl);
+        record.setSlackStatus(slackStatus);
+        record.setCreatedAt(Instant.now());
+
+        return record;
     }
 
     public List<FinancialTransaction> getMicroTransactionsBuffer() {
