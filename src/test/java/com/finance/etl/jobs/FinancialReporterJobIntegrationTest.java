@@ -99,4 +99,101 @@ class FinancialReporterJobIntegrationTest {
             assertEquals("report_daily_2026-10-05", persistedReportId);
         }
     }
+
+    @Test
+    @DisplayName("🎯 实战全链路验收：从真实 dev 库动态查最新数据，执行 Flink 批处理双流拓扑，AI 生成图表并真实推 Slack，原生落盘 finance_dev")
+    void testRealLivePipelineFromLakehouseWithSlackAndIcebergPersist() throws Exception {
+        // 1. 严格锁定 Schema 为 finance_dev，绝对隔离生产环境
+        System.setProperty("ICEBERG_CATALOG_SCHEMA", "finance_dev");
+
+        // 2. 动态从 Trino View 查询最新有动账支出的自然日大盘与真实 DWD 流水
+        DwsSummaryRecord latestDailyMacro;
+        List<FinancialTransaction> realTransactions;
+
+        try (FinancialLakehouseRepository repo = FinancialLakehouseRepository.fromConfig()) {
+            latestDailyMacro = repo.queryLatestActiveDailySummary();
+            assertNotNull(latestDailyMacro, "dev 数据库 View 中必须能查出最新的日度大盘记录");
+            assertNotNull(latestDailyMacro.getStatDate(), "统计日期不可为空");
+
+            LocalDate statDate = latestDailyMacro.getStatDate();
+            realTransactions = repo.queryDailyTransactions(statDate);
+            assertFalse(realTransactions.isEmpty(), "最新日期下的真实 DWD 动账交易明细不可为空");
+        }
+
+        String periodType = "DAILY";
+        String periodValue = latestDailyMacro.getStatDate().toString();
+
+        System.out.println("================================================================================");
+        System.out.printf("🚀 [Real Live Pipeline Test] 正在针对 dev 库最新日期 (%s) 启动完整 Flink 双流批处理流水线...\n", periodValue);
+        System.out.printf("  • 宏观净支出基准: ￥%s (笔数: %d)\n", latestDailyMacro.getNetExpense(), latestDailyMacro.getTxCount());
+        System.out.printf("  • 微观真实流水数: %d 笔 (将全量装箱送入算子缓冲区)\n", realTransactions.size());
+        System.out.println("================================================================================");
+
+        // 3. 构建 Flink 批处理环境
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setRuntimeMode(RuntimeExecutionMode.BATCH);
+        env.setParallelism(1);
+
+        // 4. 封装真实的宏观与微观有界 Source
+        final DwsSummaryRecord finalMacro = latestDailyMacro;
+        final List<FinancialTransaction> finalMicro = realTransactions;
+
+        DataGeneratorSource<DwsSummaryRecord> macroSource = new DataGeneratorSource<>(
+                (GeneratorFunction<Long, DwsSummaryRecord>) index -> finalMacro,
+                1L,
+                RateLimiterStrategy.noOp(),
+                org.apache.flink.api.common.typeinfo.TypeInformation.of(DwsSummaryRecord.class)
+        );
+
+        DataGeneratorSource<FinancialTransaction> microSource = new DataGeneratorSource<>(
+                (GeneratorFunction<Long, FinancialTransaction>) index -> finalMicro.get(index.intValue()),
+                (long) finalMicro.size(),
+                RateLimiterStrategy.noOp(),
+                org.apache.flink.api.common.typeinfo.TypeInformation.of(FinancialTransaction.class)
+        );
+
+        // 5. 开启 postToSlack = true，开启批完成最后一笔精准发射
+        FinancialReportBroadcastProcessFunction reportFunction =
+                new FinancialReportBroadcastProcessFunction(periodType, periodValue, true, finalMicro.size());
+
+        // 6. 编排 Pipeline（默认自动挂载 Flink 原生 IcebergR2Sink 直写 ads_financial_reports）
+        FinancialReporterPipeline pipeline =
+                new FinancialReporterPipeline(macroSource, microSource, reportFunction);
+
+        pipeline.build(env);
+
+        // 7. 驱动执行 Flink 批处理
+        env.execute("live-financial-reporter-job-" + periodValue);
+
+        // 8. 物理校验 dev 湖仓表落盘记录
+        try (JdbcCatalog catalog = IcebergCatalogFactory.createJdbcCatalog()) {
+            TableIdentifier tableId = TableIdentifier.of("finance_dev", "ads_financial_reports");
+            assertTrue(catalog.tableExists(tableId), "dev 环境表 ads_financial_reports 必须存在");
+
+            Table table = catalog.loadTable(tableId);
+            boolean foundTargetReport = false;
+            String expectedReportId = "report_daily_" + periodValue;
+
+            try (CloseableIterable<Record> records = IcebergGenerics.read(table).build()) {
+                for (Record r : records) {
+                    String repId = r.get(0, String.class);
+                    if (expectedReportId.equals(repId)) {
+                        foundTargetReport = true;
+                        System.out.println("================================================================================");
+                        System.out.printf("🎉 [Verification] 物理验证通过！最新报告已持久化落盘至 finance_dev.ads_financial_reports:\n");
+                        System.out.printf("  • report_id    : %s\n", repId);
+                        System.out.printf("  • period_value : %s\n", r.get(2, String.class));
+                        System.out.printf("  • report_date  : %s\n", r.get(3, Object.class));
+                        System.out.printf("  • net_expense  : ￥%s\n", r.get(6, Object.class));
+                        System.out.printf("  • chart_url    : %s\n", r.get(12, String.class));
+                        System.out.printf("  • slack_status : %s\n", r.get(13, String.class));
+                        System.out.println("================================================================================");
+                        assertEquals("SENT", r.get(13, String.class), "真实执行下 Slack 推送状态必须为 SENT");
+                        assertNotNull(r.get(12, String.class), "QuickChart 短链不可为空");
+                    }
+                }
+            }
+            assertTrue(foundTargetReport, "必须在 finance_dev 湖仓中查到对应 report_id 为 " + expectedReportId + " 的落盘报告！");
+        }
+    }
 }
