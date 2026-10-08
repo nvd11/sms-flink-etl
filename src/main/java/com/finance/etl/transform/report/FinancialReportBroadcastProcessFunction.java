@@ -87,15 +87,20 @@ public class FinancialReportBroadcastProcessFunction
     /**
      * 1. 主流事实交易处理入口 (processElement)
      * 🎯 核心注解:
-     * - 当主流一条条真实的刷卡/支付流水流经本算子时触发；
-     * - 持有 ReadOnlyContext 受到编译期只读保护，禁止修改广播状态；
-     * - 将流经的微观流水全景缓冲至内存列表，用于批结束时一次性整吞投喂给 AI 提炼代表作案例。
+     * - 数据来源链路：
+     *   1) 来源绑定：由 FinancialReporterPipeline 中 microStream.connect(broadcastMacroStream) 显式声明；
+     *      作为调用者的 microStream 走主管通道，其携带的每一笔 DWD 交易流水都会被 Flink 运行时自动分派至本方法；
+     *   2) 装箱缓冲：内部通过 microTransactionsBuffer.add(transaction) 逐笔收拢入队，将整条流的数据完整收集；
+     * - 权限与执行策略：
+     *   1) 持有 ReadOnlyContext 受到编译期只读保护，禁止修改广播状态；
+     *   2) 将流经的微观流水全景缓冲至内存列表，用于批结束 (close/trigger) 时一次性整吞投喂给 AI 提炼代表作案例。
      */
     @Override
     public void processElement(FinancialTransaction transaction,
                                ReadOnlyContext ctx,
                                Collector<String> out) throws Exception {
         if (transaction != null) {
+            // 🎯 核心存入点：将 microStream 管道中流经的每一笔真实刷卡事实明细一笔不漏地收集至内存缓冲列表
             microTransactionsBuffer.add(transaction);
         }
     }
