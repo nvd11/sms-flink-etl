@@ -116,6 +116,23 @@
 | `top1_category_amt`| `DECIMAL(12,2)`| 该第一大类消费金额 |
 | `top_merchants_json`| `VARCHAR` | 本周消费 Top 3 商户排行榜概要 |
 
+#### 3.2.1 周度窗口识别与动态调度机制 (Weekly Routing & Dynamic Discovery)
+* **双轨制触发策略 (Dual-Track Dispatching)**：
+  1. **显式指定模式 (Explicit Override)**：通过 CLI 参数 `--week <YYYY-Www>`（如 `--week 2026-W40`）精确回溯、重跑或修复历史周；
+  2. **缺省自动感知模式 (Auto-Discovery)**：当调度平台未传入周期参数时，作业自动执行如下 SQL 向 DWS 视图探查当前有动账消费的最新周：
+     ```sql
+     SELECT week_period, week_start_date, week_end_date, min_id, max_id, tx_count, net_expense
+     FROM iceberg.finance_dev.dws_financial_summary_weekly
+     WHERE tx_count > 0
+     ORDER BY week_period DESC
+     LIMIT 1;
+     ```
+* **周期窗口重算 vs 传统流式水位对比 (Window Re-evaluation vs Streaming Watermarks)**：
+  * **Summary 报表不依赖流式单调递增水位**：流式管道（如 `sms-gmail-r2`、`sms-ods-to-dwd`）维护 `etl_sync_offsets` 增量水位，旨在确保“邮件/短信仅消费一次，不重不漏”；而服务层 Summary 报表面向的是**“业务自然时间窗口”的整体平账与全景审计**；
+  * **窗口内重复触发的自动累加与覆盖 (Idempotent In-Place Upsert)**：
+    若当前处于 W41（如 10月5日 至 10月11日），周一生成了一份 W41 研报；周六（10月10日）再次触发执行时，系统依然定位到当前自然周 `2026-W41`。Trino 逻辑视图会自动将周二至周六新增的 DWD 流水全量动态计算在内。Flink 写入端通过 Iceberg 原生 Equality Delete 机制（主键 `report_id = 'report_weekly_2026-W41', report_date = 2026-10-05`）原地覆盖旧快照，保持报表永远最新且无脏数据；
+  * **自然周自动跃迁**：当下周一（如 10月12日）产生第 42 周新流水入库后，DWS 视图倒序排序将自然浮现 `2026-W42`，系统自适应迈入下一周周期。
+
 ---
 
 ### 3.3 每月财务资产负债大盘 (Monthly Financial Balance)
@@ -359,6 +376,13 @@ graph TB
 * **图表可视化引擎**:
   * **QuickChart 官方标准短链 API** (`POST https://quickchart.io/chart/create`)；
   * 自动将环形饼图 (`doughnut`) 与横向柱状图 (`horizontalBar`) 转换为标准静态短链图片；
+  * **多图无损落盘规范 (Multi-Chart JSON Array Storage)**：算子循环抓取研报正文中生成的所有图表短链，去重后序列化为 JSON 数组字符串（`["url1", "url2"]`）持久化至 `chart_url` 字段（`VARCHAR` 列零 Schema 变动），前端或 BI 既可通过下标快速取图，又保障了全部图表 100% 归档。
+* **ADS 报表分区与周期起止时间标准 (Date Range & Anchor Date Convention)**:
+  * **单一标量分区键 `report_date` 规范**：Iceberg 表物理分区为 `month(report_date)`，为兼顾日/周/月跨粒度统一路由，`report_date` 统一定义为周期的“基准锚定日”：
+    * 日度 (DAILY)：当天（如 `2026-10-08`）；
+    * 周度 (WEEKLY)：周一锚定日（如 `2026-10-05`），自然周日为 `date_add('day', 6, report_date)`（`2026-10-11`）；
+    * 月度 (MONTHLY)：月首日锚定日（如 `2026-10-01`），月末日为 `last_day_of_month(report_date)`（`2026-10-31`）；
+  * **JSON 内嵌显式时间边界**：在 `metrics_json` 中直接包含 `"startDate"` 与 `"endDate"` 字段，方便业务层直接提取精准起止区间。
 * **消息展现载体**:
   * **Slack Block Kit**（以 Yui 身份私聊直达主人 `U0AM8G9AARF`）。
 

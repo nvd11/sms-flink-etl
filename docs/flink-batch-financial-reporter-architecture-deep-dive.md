@@ -314,6 +314,36 @@ adsSink.append(rowStream);
 * **技术约束点**：在 Iceberg 分区表上开启 Upsert 模式时，Equality 字段**必须包含分区键对应的源字段**！因此这里显式声明 Equality 列为 `report_id,report_date`，使得重新运行同一天或同一个月的报表任务时，底层自动生成 Equality Delete 文件，平滑覆盖旧快照，天然具备幂等性。
 * **单并发约束**：`IcebergR2Sink` 内部锁定 `writeParallelism = 1`，将研报单条记录整合成一个合法的 Parquet 数据文件，避免产生任何碎片文件，并在批处理结束时由 `IcebergFilesCommitter` 完成 Snapshot 提交。
 
+### 7.4 零 Schema 改造的多图存储与起止日期拓展 (Multi-Chart JSON & Date Range Enrichment)
+在满足“不变更既有 Iceberg 表结构”的工程约束下，系统对持久化字段进行了深度增强：
+1. **多图无损归档 (`chart_url` 列)**：
+   * 算子在生成报告后，自动提取 Markdown 中出现的全部 QuickChart 短链（去重处理）；
+   * 将多张图表序列化为标准的 JSON 数组字符串（如 `["https://quickchart.io/...1", "https://quickchart.io/...2"]`）直接写入 `chart_url` 字段；
+   * 在 Trino / DBeaver 中，可通过 `json_extract_scalar(chart_url, '$[0]')` 快速提取首图，或通过 `json_array_length(chart_url)` 统计图表总数；
+   * 在 Java 领域模型 `FinancialReportRecord` 中，提供 `getChartUrlList()` 与 `getPrimaryChartUrl()` 保持双向无缝兼容。
+2. **周期时间边界显式记录 (`metrics_json` 列)**：
+   * 针对周度和月度报表，将 `startDate` 与 `endDate` 直接内嵌在 `metrics_json` 中（如 `"startDate":"2026-10-05","endDate":"2026-10-08"`）；
+   * 业务方既可通过 JSON 属性直读起止日期，也可以通过基准锚定日 `report_date`（周一）在 SQL 中使用 `date_add('day', 6, report_date)` 衍生出自然周全区间。
+
+### 7.5 调度决策、动态周感知与时间窗口重算机制 (Dispatching, Auto-Discovery & Idempotent Re-evaluation)
+针对周度报表（Weekly Report）的触发逻辑，系统建立了清晰的决策中枢：
+1. **调度双轨制策略**：
+   * **显式指定模式 (`--week 2026-W40`)**：作业直接锁定指定周，用于历史周度研报的精准回补与重跑；
+   * **自动感知模式 (缺省未传参)**：作业向 Trino DWS 视图发起探测查询：
+     ```sql
+     SELECT week_period FROM iceberg.finance_dev.dws_financial_summary_weekly
+     WHERE tx_count > 0 ORDER BY week_period DESC LIMIT 1;
+     ```
+     以湖仓中实际存在动账流水的最高周作为目标周期（如当前探查到 `2026-W41`）。
+2. **Summary 研报无流式水位设计**：
+   * 传统的流式增量水位（`etl_sync_offsets`）服务于 ODS/DWD 层的数据去重与断点续传；
+   * 而服务层的 Summary 研报**面向的是整个自然时间窗口的宏观平账**，属于典型的**时间窗口幂等全量核算**，不记录单调递增的流位点。
+3. **同周内多次触发的自愈累加与覆盖机制**：
+   * 若今天（10月9日）生成了 W41 研报，明天（10月10日周六）主人产生了新消费并再次触发作业，由于 10月10日 仍属于 2026-W41 窗口，系统依然会选定 `2026-W41`；
+   * Trino DWS 视图会自动将 10月10日 的新流水纳入聚合，产出包含周六消费的更新版大盘；
+   * Flink 通过 Iceberg Equality Delete（`report_id, report_date`）在写入时**自动覆盖替换旧的 W41 研报**，保证湖仓中永远只有一份最新、最完整的全周研报；
+   * 只有当进入下周一（如 10月12日）且产生新周流水后，最新周探测才会自然跃迁至 `2026-W42`。
+
 ---
 
 ## 8. 端到端测试与真实落盘验证
