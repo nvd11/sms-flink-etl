@@ -16,7 +16,63 @@ import org.slf4j.LoggerFactory;
 public class CheckAdsTableRowsHelper {
     private static final Logger LOG = LoggerFactory.getLogger(CheckAdsTableRowsHelper.class);
 
-    public static void main(String[] args) {\n        checkSchema(\"finance_dev\");\n    }
+    public static void main(String[] args) {
+        checkSchema("finance_dev");
+    }
+
+    public static void testSelectStar() {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT * FROM iceberg.finance_dev.ads_financial_reports")) {
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            int colCount = md.getColumnCount();
+            System.out.println("================================================================================");
+            System.out.println("📋 Column Metadata for SELECT *:");
+            for (int i = 1; i <= colCount; i++) {
+                System.out.printf("  %d: %s (%s, type=%d)\n", i, md.getColumnName(i), md.getColumnTypeName(i), md.getColumnType(i));
+            }
+            System.out.println("--------------------------------------------------------------------------------");
+            while (rs.next()) {
+                System.out.printf("Report [%s]:\n", rs.getString("report_id"));
+                for (int i = 1; i <= colCount; i++) {
+                    Object val = rs.getObject(i);
+                    String valStr = val != null ? val.toString() : "[NULL]";
+                    if (valStr.length() > 40) valStr = valStr.substring(0, 40) + "...";
+                    System.out.printf("   col %d [%s] = %s\n", i, md.getColumnName(i), valStr);
+                }
+            }
+            System.out.println("================================================================================");
+        } catch (Exception e) {
+            LOG.error("❌ SELECT * 失败: {}", e.getMessage(), e);
+        }
+    }
+
+    public static void queryTrinoAdsTable() {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT report_id, metrics_json, summary_text, chart_url, length(summary_text) as summary_len FROM iceberg.finance_dev.ads_financial_reports")) {
+            System.out.println("================================================================================");
+            System.out.println("🔍 [Trino Query: ads_financial_reports]");
+            while (rs.next()) {
+                System.out.printf("  • report_id: %s\n    chart_url: %s\n    summary_len: %s\n    summary_text: %s\n",
+                        rs.getString("report_id"),
+                        rs.getString("chart_url"),
+                        rs.getObject("summary_len"),
+                        rs.getString("summary_text") != null ? (rs.getString("summary_text").substring(0, Math.min(50, rs.getString("summary_text").length())) + "...") : "null");
+            }
+            System.out.println("================================================================================");
+        } catch (Exception e) {
+            LOG.error("❌ Trino 查询失败: {}", e.getMessage(), e);
+        }
+    }
 
     public static void probeWeeklyWatermark(String schema) {
         String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
