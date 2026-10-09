@@ -20,6 +20,38 @@ public class CheckAdsTableRowsHelper {
         checkSchema("finance_dev");
     }
 
+    public static void checkChartUrlsInWeeklySummary() {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT report_id, chart_url, summary_text FROM iceberg.finance_dev.ads_financial_reports WHERE report_id = 'report_weekly_2026-W41'")) {
+            if (rs.next()) {
+                String repId = rs.getString("report_id");
+                String primaryChartUrl = rs.getString("chart_url");
+                String summary = rs.getString("summary_text");
+
+                System.out.println("================================================================================");
+                System.out.printf("📊 [Chart URLs in %s]\n", repId);
+                System.out.printf("  • 表字段 chart_url 存放的主图: %s\n", primaryChartUrl);
+
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile("(https?://quickchart\\.io/chart/render/[^\\s\\)\"]+)");
+                java.util.regex.Matcher m = p.matcher(summary);
+                int count = 0;
+                while (m.find()) {
+                    count++;
+                    System.out.printf("  • summary_text 中的图表短链 [%d]: %s\n", count, m.group(1));
+                }
+                System.out.printf("📈 summary_text 中总共包含: %d 条图表 URL\n", count);
+                System.out.println("================================================================================");
+            }
+        } catch (Exception e) {
+            LOG.error("❌ 提取失败: {}", e.getMessage(), e);
+        }
+    }
+
     public static void testSelectStar() {
         String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
         String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
