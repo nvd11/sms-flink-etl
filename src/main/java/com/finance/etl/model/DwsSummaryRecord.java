@@ -17,6 +17,8 @@ public class DwsSummaryRecord implements Serializable {
     private String periodType; // "DAILY", "WEEKLY", "MONTHLY"
     private String periodValue; // e.g. "2026-10-03", "2026-W40", "2026-09"
     private LocalDate statDate; // 日维度专用
+    private LocalDate startDate; // 周期开始日期 (周一 / 月初)
+    private LocalDate endDate; // 周期截止日期 (周日 / 月末)
     private Long minId; // 包含的最小 DWD 行号
     private Long maxId; // 包含的最大 DWD 行号 (增量游标)
     private Long txCount; // 有效消费笔数
@@ -110,6 +112,22 @@ public class DwsSummaryRecord implements Serializable {
 
     public void setStatDate(LocalDate statDate) {
         this.statDate = statDate;
+    }
+
+    public LocalDate getStartDate() {
+        return startDate;
+    }
+
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
+
+    public LocalDate getEndDate() {
+        return endDate;
+    }
+
+    public void setEndDate(LocalDate endDate) {
+        this.endDate = endDate;
     }
 
     public Long getMinId() {
@@ -297,9 +315,11 @@ public class DwsSummaryRecord implements Serializable {
 
     public String toJson() {
         return String.format(
-                "{\"periodType\":\"%s\",\"periodValue\":\"%s\",\"txCount\":%s,\"totalExpense\":%s,\"totalRefund\":%s,\"netExpense\":%s,\"totalIncome\":%s,\"totalTransfer\":%s,\"foodExpense\":%s,\"transportExpense\":%s,\"onlineShoppingExpense\":%s,\"offlineShoppingExpense\":%s,\"medicalExpense\":%s,\"communicationExpense\":%s,\"insuranceExpense\":%s,\"propertyExpense\":%s,\"travelExpense\":%s,\"personalTransferExpense\":%s,\"otherExpense\":%s}",
+                "{\"periodType\":\"%s\",\"periodValue\":\"%s\",\"startDate\":\"%s\",\"endDate\":\"%s\",\"txCount\":%s,\"totalExpense\":%s,\"totalRefund\":%s,\"netExpense\":%s,\"totalIncome\":%s,\"totalTransfer\":%s,\"foodExpense\":%s,\"transportExpense\":%s,\"onlineShoppingExpense\":%s,\"offlineShoppingExpense\":%s,\"medicalExpense\":%s,\"communicationExpense\":%s,\"insuranceExpense\":%s,\"propertyExpense\":%s,\"travelExpense\":%s,\"personalTransferExpense\":%s,\"otherExpense\":%s}",
                 periodType != null ? periodType : "",
                 periodValue != null ? periodValue : "",
+                startDate != null ? startDate : "",
+                endDate != null ? endDate : "",
                 txCount != null ? txCount : 0,
                 totalExpense != null ? totalExpense : 0,
                 totalRefund != null ? totalRefund : 0,

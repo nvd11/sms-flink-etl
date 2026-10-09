@@ -175,6 +175,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         String sql = String.format("""
                 SELECT
                     week_period, min_id, max_id, tx_count,
+                    week_start_date, week_end_date,
                     total_expense, total_refund, net_expense, total_income,
                     0.0 AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
@@ -212,6 +213,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         String sql = String.format("""
                 SELECT
                     week_period, min_id, max_id, tx_count,
+                    week_start_date, week_end_date,
                     total_expense, total_refund, net_expense, total_income,
                     0.0 AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
@@ -219,9 +221,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     travel_expense, personal_transfer_expense, other_expense,
                     null AS max_single_amount
                 FROM iceberg.%s.dws_financial_summary_weekly
-                WHERE week_period = '%s'
-                LIMIT 1
-                """, this.schema, weekPeriod);
+                WHERE week_period = '%s'\n                LIMIT 1\n                """, this.schema, weekPeriod);
 
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
@@ -337,6 +337,14 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         record.setTravelExpense(rs.getBigDecimal("travel_expense"));
         record.setPersonalTransferExpense(rs.getBigDecimal("personal_transfer_expense"));
         record.setOtherExpense(rs.getBigDecimal("other_expense"));
+
+        try {
+            java.sql.Date s = rs.getDate("week_start_date");
+            if (s != null) record.setStartDate(s.toLocalDate());
+            java.sql.Date e = rs.getDate("week_end_date");
+            if (e != null) record.setEndDate(e.toLocalDate());
+        } catch (Exception ignored) {}
+
         return record;
     }
 

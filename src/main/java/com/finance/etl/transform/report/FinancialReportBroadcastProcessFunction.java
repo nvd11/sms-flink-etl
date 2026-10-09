@@ -251,19 +251,34 @@ public class FinancialReportBroadcastProcessFunction
         // 组装落盘到 ads_financial_reports 的实体
         String reportId = String.format("report_%s_%s", periodType.toLowerCase(), periodValue);
         LocalDate reportDate = LocalDate.now();
+        LocalDate startDate = null;
+        LocalDate endDate = null;
         if ("DAILY".equalsIgnoreCase(periodType)) {
             try {
                 reportDate = LocalDate.parse(periodValue);
+                startDate = reportDate;
+                endDate = reportDate;
             } catch (Exception ignored) {}
         } else if ("MONTHLY".equalsIgnoreCase(periodType)) {
             try {
                 reportDate = LocalDate.parse(periodValue + "-01");
+                startDate = reportDate;
+                endDate = reportDate.plusMonths(1).minusDays(1);
             } catch (Exception ignored) {}
         } else if ("WEEKLY".equalsIgnoreCase(periodType)) {
             try {
                 java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ISO_WEEK_DATE;
                 reportDate = LocalDate.parse(periodValue + "-1", dtf);
+                startDate = reportDate;
+                endDate = reportDate.plusDays(6);
             } catch (Exception ignored) {}
+        }
+
+        if (macroSummary.getStartDate() == null) {
+            macroSummary.setStartDate(startDate);
+        }
+        if (macroSummary.getEndDate() == null) {
+            macroSummary.setEndDate(endDate);
         }
 
         FinancialReportRecord record = new FinancialReportRecord();
@@ -338,13 +353,28 @@ public class FinancialReportBroadcastProcessFunction
         BigDecimal netExpense = totalExpense.subtract(totalRefund);
 
         LocalDate statDate = null;
+        LocalDate startDate = null;
+        LocalDate endDate = null;
         if ("DAILY".equalsIgnoreCase(periodType)) {
             try {
                 statDate = LocalDate.parse(periodValue);
+                startDate = statDate;
+                endDate = statDate;
+            } catch (Exception ignored) {}
+        } else if ("MONTHLY".equalsIgnoreCase(periodType)) {
+            try {
+                startDate = LocalDate.parse(periodValue + "-01");
+                endDate = startDate.plusMonths(1).minusDays(1);
+            } catch (Exception ignored) {}
+        } else if ("WEEKLY".equalsIgnoreCase(periodType)) {
+            try {
+                java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ISO_WEEK_DATE;
+                startDate = LocalDate.parse(periodValue + "-1", dtf);
+                endDate = startDate.plusDays(6);
             } catch (Exception ignored) {}
         }
 
-        return new DwsSummaryRecord(
+        DwsSummaryRecord fallback = new DwsSummaryRecord(
                 periodType,
                 periodValue,
                 statDate,
@@ -370,6 +400,9 @@ public class FinancialReportBroadcastProcessFunction
                 null,
                 null
         );
+        fallback.setStartDate(startDate);
+        fallback.setEndDate(endDate);
+        return fallback;
     }
 
     public void setLatestMacroSummary(DwsSummaryRecord latestMacroSummary) {
