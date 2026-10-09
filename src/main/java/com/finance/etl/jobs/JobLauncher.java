@@ -53,9 +53,17 @@ public class JobLauncher {
                 SmsOdsToDwdJob.main(forwardedArgs);
                 break;
 
+            case "report":
+            case "financialreporterjob":
+            case "financial-reporter":
+            case "financial-reporter-job":
+                LOG.info("🚀 Invoking FinancialReporterJob.main()...");
+                FinancialReporterJob.main(forwardedArgs);
+                break;
+
             default:
-                LOG.error("❌ Unknown job name: '{}'. Supported targets: ['ods', 'dwd']", targetJob);
-                throw new IllegalArgumentException("Unknown job target: " + targetJob + ". Expected 'ods' or 'dwd'");
+                LOG.error("❌ Unknown job name: '{}'. Supported targets: ['ods', 'dwd', 'report']", targetJob);
+                throw new IllegalArgumentException("Unknown job target: " + targetJob + ". Expected 'ods', 'dwd', or 'report'");
         }
     }
 }

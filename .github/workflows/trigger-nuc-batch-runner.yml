@@ -12,7 +12,7 @@ on:
           - finance
           - finance_dev
       pipeline_stage:
-        description: 'Pipeline Stage to Execute (ods, dwd, or all)'
+        description: 'Pipeline Stage to Execute (ods, dwd, report, or all)'
         required: false
         default: 'all'
         type: choice
@@ -20,6 +20,20 @@ on:
           - all
           - ods
           - dwd
+          - report
+      report_period:
+        description: 'Report Period for report stage (DAILY, WEEKLY, MONTHLY)'
+        required: false
+        default: 'DAILY'
+        type: choice
+        options:
+          - DAILY
+          - WEEKLY
+          - MONTHLY
+      report_value:
+        description: 'Optional period value for report stage (e.g. 2026-10-08, 2026-W41, 2026-10; leave empty for auto-discovery)'
+        required: false
+        default: ''
       image:
         description: 'Override Docker image (leave empty for default baseline image)'
         required: false
@@ -42,6 +56,8 @@ jobs:
           SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
           TARGET_ENV: ${{ inputs.target_env || 'finance' }}
           PIPELINE_STAGE: ${{ inputs.pipeline_stage || 'all' }}
+          REPORT_PERIOD: ${{ inputs.report_period || 'DAILY' }}
+          REPORT_VALUE: ${{ inputs.report_value || '' }}
           OVERRIDE_IMAGE: ${{ inputs.image }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -76,17 +92,20 @@ jobs:
             echo "🚀 [Stage: ${stage_name^^}] Preparing dispatch for Job: ${job_name} (Target Schema: ${TARGET_ENV})"
             echo "================================================================================"
 
-            # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME 与镜像，并放宽 activeDeadlineSeconds 为 600s)
+            # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME, REPORT_PERIOD, REPORT_VALUE 与镜像，并放宽 activeDeadlineSeconds 为 600s)
             run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${job_name} -n batch-jobs --dry-run=client -o json" \
-              | jq --arg schema "${TARGET_ENV}" --arg stage "${stage_name}" --arg img "${OVERRIDE_IMAGE}" '
+              | jq --arg schema "${TARGET_ENV}" --arg stage "${stage_name}" --arg rperiod "${REPORT_PERIOD}" --arg rval "${REPORT_VALUE}" --arg img "${OVERRIDE_IMAGE}" '
                   .spec.activeDeadlineSeconds = 600 |
                   .spec.template.spec.activeDeadlineSeconds = 600 |
                   .spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) 
-                    | map(select(.name != "ICEBERG_CATALOG_SCHEMA" and .name != "FLINK_JOB_NAME")) 
+                    | map(select(.name != "ICEBERG_CATALOG_SCHEMA" and .name != "FLINK_JOB_NAME" and .name != "REPORT_PERIOD" and .name != "REPORT_VALUE")) 
                     + [
                         {"name": "ICEBERG_CATALOG_SCHEMA", "value": $schema},
-                        {"name": "FLINK_JOB_NAME", "value": $stage}
-                      ]) |
+                        {"name": "FLINK_JOB_NAME", "value": $stage},
+                        {"name": "REPORT_PERIOD", "value": $rperiod}
+                      ]
+                    + (if $rval != "" then [{"name": "REPORT_VALUE", "value": $rval}] else [] end)
+                  ) |
                   if ($img != "") then .spec.template.spec.containers[0].image = $img else . end
                 ' \
               | run_ssh "sudo kubectl apply -f -"
@@ -119,6 +138,10 @@ jobs:
 
           if [ "${PIPELINE_STAGE}" = "all" ] || [ "${PIPELINE_STAGE}" = "dwd" ]; then
             execute_stage "dwd"
+          fi
+
+          if [ "${PIPELINE_STAGE}" = "report" ]; then
+            execute_stage "report"
           fi
 
           echo "================================================================================"

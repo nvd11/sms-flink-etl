@@ -39,14 +39,24 @@ public class FinancialReporterJob {
         LOG.info("🚀 Starting Financial Reporter Flink Batch Job ({})", JOB_NAME);
         LOG.info("================================================================================");
 
-        // 1. 解析作业运行参数
-        String periodType = "DAILY";
-        String periodValue = null;
+        // 1. 解析作业运行参数 (优先环境变量，支持命令行参数覆盖)
+        String periodType = ConfigUtils.get("REPORT_PERIOD", "DAILY").toUpperCase();
+        String periodValue = ConfigUtils.get("REPORT_VALUE", null);
+        if (periodValue == null) {
+            periodValue = ConfigUtils.get("REPORT_DATE", null);
+        }
+        if (periodValue == null) {
+            periodValue = ConfigUtils.get("REPORT_WEEK", null);
+        }
+        if (periodValue == null) {
+            periodValue = ConfigUtils.get("REPORT_MONTH", null);
+        }
 
         for (int i = 0; i < args.length; i++) {
             if ("--period".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
                 periodType = args[++i].toUpperCase();
             } else if ("--date".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
+                periodType = "DAILY";
                 periodValue = args[++i];
             } else if ("--week".equalsIgnoreCase(args[i]) && i + 1 < args.length) {
                 periodType = "WEEKLY";
