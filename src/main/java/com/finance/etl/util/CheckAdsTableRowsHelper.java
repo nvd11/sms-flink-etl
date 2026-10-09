@@ -16,8 +16,46 @@ import org.slf4j.LoggerFactory;
 public class CheckAdsTableRowsHelper {
     private static final Logger LOG = LoggerFactory.getLogger(CheckAdsTableRowsHelper.class);
 
-    public static void main(String[] args) {
-        checkSchema("finance_dev");
+    public static void main(String[] args) {\n        checkSchema(\"finance_dev\");\n    }
+
+    public static void probeWeeklyWatermark(String schema) {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+        String sql = String.format("""
+                SELECT
+                    week_period,
+                    week_start_date,
+                    week_end_date,
+                    min_id,
+                    max_id,
+                    tx_count,
+                    total_expense,
+                    net_expense
+                FROM iceberg.%s.dws_financial_summary_weekly
+                ORDER BY week_period DESC
+                """, schema);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery(sql)) {
+
+            System.out.println("================================================================================");
+            System.out.printf("🌊 [Weekly Watermark & Metrics in iceberg.%s.dws_financial_summary_weekly]:\n", schema);
+            while (rs.next()) {
+                System.out.printf("  • 周度: %s | 日期跨度: [%s ~ %s] | 水位[min_id ~ max_id]: [%s ~ %s] | 消费笔数: %s | 净支出: ￥%s\n",
+                        rs.getString("week_period"),
+                        rs.getDate("week_start_date"),
+                        rs.getDate("week_end_date"),
+                        rs.getLong("min_id"),
+                        rs.getLong("max_id"),
+                        rs.getLong("tx_count"),
+                        rs.getBigDecimal("net_expense"));
+            }
+            System.out.println("================================================================================");
+        } catch (Exception e) {
+            LOG.error("❌ 探查周度水位线失败: {}", e.getMessage(), e);
+        }
     }
 
     public static void probeWeeklyAndMonthly(String schema) {
