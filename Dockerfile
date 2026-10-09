@@ -34,7 +34,10 @@ ENTRYPOINT ["java", \
     "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED", \
     "--add-opens=java.base/java.util=ALL-UNNAMED", \
     "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED", \
+    "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED", \
+    "--add-opens=java.base/java.net=ALL-UNNAMED", \
     "--add-opens=java.base/java.nio=ALL-UNNAMED", \
+    "--add-opens=java.base/java.time=ALL-UNNAMED", \
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED", \
     "-Xmx1536m", \
     "-jar", "/app/sms-flink-etl-1.0.0.jar"]
