@@ -224,12 +224,27 @@ public class FinancialReportBroadcastProcessFunction
             }
         }
 
-        // 提取生成的图表短链
+        // 提取生成的全部图表短链并序列化为 JSON 数组字符串 (零 Schema 变更方案，完整持久化所有图表)
         String chartUrl = null;
         if (report != null) {
             Matcher m = QUICKCHART_URL_PATTERN.matcher(report);
-            if (m.find()) {
-                chartUrl = m.group(1);
+            List<String> urls = new ArrayList<>();
+            while (m.find()) {
+                String u = m.group(1);
+                if (!urls.contains(u)) {
+                    urls.add(u);
+                }
+            }
+            if (!urls.isEmpty()) {
+                StringBuilder jsonBuilder = new StringBuilder("[");
+                for (int i = 0; i < urls.size(); i++) {
+                    jsonBuilder.append("\"").append(urls.get(i)).append("\"");
+                    if (i < urls.size() - 1) {
+                        jsonBuilder.append(",");
+                    }
+                }
+                jsonBuilder.append("]");
+                chartUrl = jsonBuilder.toString();
             }
         }
 

@@ -4,6 +4,9 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -137,6 +140,32 @@ public class FinancialReportRecord implements Serializable {
 
     public void setChartUrl(String chartUrl) {
         this.chartUrl = chartUrl;
+    }
+
+    /**
+     * 解析 chart_url (兼容 JSON 数组字符串或历史单 URL 字符串)，返回全部图表 URL 列表
+     */
+    public List<String> getChartUrlList() {
+        if (chartUrl == null || chartUrl.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        if (chartUrl.startsWith("[")) {
+            List<String> list = new ArrayList<>();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"(https?://[^\"]+)\"").matcher(chartUrl);
+            while (m.find()) {
+                list.add(m.group(1));
+            }
+            return list;
+        }
+        return Collections.singletonList(chartUrl);
+    }
+
+    /**
+     * 获取首选主图 URL (第一张图)
+     */
+    public String getPrimaryChartUrl() {
+        List<String> list = getChartUrlList();
+        return list.isEmpty() ? null : list.get(0);
     }
 
     public String getSlackStatus() {
