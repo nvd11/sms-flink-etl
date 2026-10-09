@@ -20,6 +20,32 @@ public class CheckAdsTableRowsHelper {
         checkSchema("finance_dev");
     }
 
+    public static void checkEtlSyncOffsets(String schema) {
+        String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
+        String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
+        String password = com.finance.etl.util.ConfigUtils.get("TRINO_PASSWORD", null);
+
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(url, user, password);
+             java.sql.Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT job_name, channel, source_target, last_offset, last_event_time, updated_at FROM iceberg." + schema + ".etl_sync_offsets ORDER BY updated_at DESC")) {
+            System.out.println("================================================================================");
+            System.out.println("🌊 [Watermark Table: iceberg." + schema + ".etl_sync_offsets]:");
+            boolean hasRows = false;
+            while (rs.next()) {
+                hasRows = true;
+                System.out.printf("  • job: %s | channel: %s | target: %s | offset: %d | event_time: %s | updated: %s\n",
+                        rs.getString("job_name"), rs.getString("channel"), rs.getString("source_target"),
+                        rs.getLong("last_offset"), rs.getTimestamp("last_event_time"), rs.getTimestamp("updated_at"));
+            }
+            if (!hasRows) {
+                System.out.println("  (表内暂无行记录)");
+            }
+            System.out.println("================================================================================");
+        } catch (Exception e) {
+            LOG.error("❌ 查询水位表失败 ({}): {}", schema, e.getMessage());
+        }
+    }
+
     public static void checkChartUrlsInWeeklySummary() {
         String url = com.finance.etl.util.ConfigUtils.get("TRINO_JDBC_URL", "jdbc:trino://10.0.1.113:30880/iceberg/finance");
         String user = com.finance.etl.util.ConfigUtils.get("TRINO_USER", "jason");
