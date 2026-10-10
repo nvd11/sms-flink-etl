@@ -73,7 +73,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     total_expense, total_refund, net_expense, total_income, total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     max_single_amount
                 FROM iceberg.%s.dws_financial_summary_daily
                 WHERE tx_count > 0
@@ -109,6 +109,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                 BigDecimal insurance = rs.getBigDecimal("insurance_expense");
                 BigDecimal property = rs.getBigDecimal("property_expense");
                 BigDecimal travel = rs.getBigDecimal("travel_expense");
+                BigDecimal car = rs.getBigDecimal("car_expense");
                 BigDecimal personalTransfer = rs.getBigDecimal("personal_transfer_expense");
                 BigDecimal other = rs.getBigDecimal("other_expense");
                 BigDecimal maxSingleAmt = rs.getBigDecimal("max_single_amount");
@@ -120,7 +121,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                         minId, maxId, txCount,
                         totalExpense, totalRefund, netExpense, totalIncome, totalTransfer,
                         food, transport, onlineShopping, offlineShopping,
-                        medical, communication, insurance, property, travel, personalTransfer, other,
+                        medical, communication, insurance, property, travel, car, personalTransfer, other,
                         maxSingleAmt, null
                 );
 
@@ -147,7 +148,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     total_expense, total_refund, net_expense, total_income, total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     max_single_amount
                 FROM iceberg.%s.dws_financial_summary_daily
                 WHERE stat_date = DATE '%s'
@@ -180,7 +181,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     0.0 AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     null AS max_single_amount
                 FROM iceberg.%s.dws_financial_summary_weekly
                 WHERE tx_count > 0
@@ -218,7 +219,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     0.0 AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     null AS max_single_amount
                 FROM iceberg.%s.dws_financial_summary_weekly
                 WHERE week_period = '%s'\n                LIMIT 1\n                """, this.schema, weekPeriod);
@@ -251,7 +252,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     total_transfer_cny AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     max_single_amount
                 FROM iceberg.%s.dws_financial_summary_monthly
                 WHERE tx_count > 0
@@ -291,7 +292,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
                     total_transfer_cny AS total_transfer,
                     food_expense, transport_expense, online_shopping_expense, offline_shopping_expense,
                     medical_expense, communication_expense, insurance_expense, property_expense,
-                    travel_expense, personal_transfer_expense, other_expense,
+                    travel_expense, car_expense, personal_transfer_expense, other_expense,
                     max_single_amount
                 FROM iceberg.%s.dws_financial_summary_monthly
                 WHERE stat_month = '%s'
@@ -335,6 +336,7 @@ public class FinancialLakehouseRepository implements AutoCloseable {
         record.setInsuranceExpense(rs.getBigDecimal("insurance_expense"));
         record.setPropertyExpense(rs.getBigDecimal("property_expense"));
         record.setTravelExpense(rs.getBigDecimal("travel_expense"));
+        record.setCarExpense(rs.getBigDecimal("car_expense"));
         record.setPersonalTransferExpense(rs.getBigDecimal("personal_transfer_expense"));
         record.setOtherExpense(rs.getBigDecimal("other_expense"));
 

@@ -32,8 +32,9 @@ class FinancialAdvisorAgentTest {
                 new BigDecimal("2360.67"),  // MEDICAL (含陪护1399)
                 new BigDecimal("199.10"),   // COMMUNICATION (移动10086)
                 new BigDecimal("5500.00"),  // INSURANCE (车险保费)
-                new BigDecimal("30.00"),    // PROPERTY_MANAGEMENT (物业费)
+                new BigDecimal("30.00"),    // PROPERTY_MANAGEMENT (居住物业与公用事业)
                 new BigDecimal("39.80"),    // TRAVEL (文旅)
+                new BigDecimal("0.00"),     // CAR_EXPENSE (爱车养护)
                 new BigDecimal("107.90"),   // PERSONAL_TRANSFER (个人扫码)
                 new BigDecimal("288.79"),   // OTHER (平台杂项)
                 new BigDecimal("8988.08"),  // 单笔峰值

@@ -30,16 +30,17 @@ public class DwsSummaryRecord implements Serializable {
     private BigDecimal totalIncome; // 理赔到账等被动收入总额
     private BigDecimal totalTransfer; // 信用卡还款划转/内部转账总额
 
-    // 11 大细分消费类目开销
+    // 12 大细分消费类目开销
     private BigDecimal foodExpense; // 餐饮美食开销 (FOOD)
-    private BigDecimal transportExpense; // 交通出行打车开销 (TRANSPORT)
+    private BigDecimal transportExpense; // 交通出行打车通勤开销 (TRANSPORT)
     private BigDecimal onlineShoppingExpense; // 线上电商网购开销 (ONLINE_SHOPPING)
-    private BigDecimal offlineShoppingExpense; // 线下实体商超开销 (OFFLINE_SHOPPING)
+    private BigDecimal offlineShoppingExpense; // 线下实体商超零售开销 (OFFLINE_SHOPPING)
     private BigDecimal medicalExpense; // 医疗健康药品支出 (MEDICAL)
     private BigDecimal communicationExpense; // 电信通信话费宽带 (COMMUNICATION)
     private BigDecimal insuranceExpense; // 保险保费支出 (INSURANCE)
-    private BigDecimal propertyExpense; // 物业管理费支出 (PROPERTY_MANAGEMENT)
+    private BigDecimal propertyExpense; // 居住物业与公用事业开销 (PROPERTY_MANAGEMENT: 物业费/水电煤)
     private BigDecimal travelExpense; // 旅游文旅度假支出 (TRAVEL)
+    private BigDecimal carExpense; // 爱车养护与车辆服务支出 (CAR_EXPENSE: 4S店/维保/保养等)
     private BigDecimal personalTransferExpense; // 个人转账扫码支出 (PERSONAL_TRANSFER)
     private BigDecimal otherExpense; // 其他平台杂项支出 (OTHER)
 
@@ -57,7 +58,8 @@ public class DwsSummaryRecord implements Serializable {
                             BigDecimal onlineShoppingExpense, BigDecimal offlineShoppingExpense,
                             BigDecimal medicalExpense, BigDecimal communicationExpense,
                             BigDecimal insuranceExpense, BigDecimal propertyExpense,
-                            BigDecimal travelExpense, BigDecimal personalTransferExpense,
+                            BigDecimal travelExpense, BigDecimal carExpense,
+                            BigDecimal personalTransferExpense,
                             BigDecimal otherExpense,
                             BigDecimal maxSingleAmount, String maxMerchant) {
         this.periodType = periodType;
@@ -80,6 +82,7 @@ public class DwsSummaryRecord implements Serializable {
         this.insuranceExpense = defaultZero(insuranceExpense);
         this.propertyExpense = defaultZero(propertyExpense);
         this.travelExpense = defaultZero(travelExpense);
+        this.carExpense = defaultZero(carExpense);
         this.personalTransferExpense = defaultZero(personalTransferExpense);
         this.otherExpense = defaultZero(otherExpense);
         this.maxSingleAmount = defaultZero(maxSingleAmount);
@@ -264,6 +267,14 @@ public class DwsSummaryRecord implements Serializable {
 
     public void setTravelExpense(BigDecimal travelExpense) {
         this.travelExpense = defaultZero(travelExpense);
+    }
+
+    public BigDecimal getCarExpense() {
+        return carExpense;
+    }
+
+    public void setCarExpense(BigDecimal carExpense) {
+        this.carExpense = defaultZero(carExpense);
     }
 
     public BigDecimal getPersonalTransferExpense() {

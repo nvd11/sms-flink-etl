@@ -93,7 +93,7 @@ public class FinancialReportPromptBuilder {
         sb.append(String.format("  - 理赔与被动收入: ￥%s 元 (正向资金回血)\n", formatDecimal(macro.getTotalIncome())));
         sb.append(String.format("  - 信用卡集中还款: ￥%s 元 (资产内部划转，非日常消费)\n", formatDecimal(macro.getTotalTransfer())));
 
-        sb.append("\n【2. 十一大消费类目宏观大盘分布 (Category Breakdown)】:\n");
+        sb.append("\n【2. 十二大消费类目宏观大盘分布 (Category Breakdown)】:\n");
         BigDecimal net = macro.getNetExpense();
         sb.append(String.format("  1. 餐饮美食 (FOOD)                 : ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getFoodExpense()), calcPct(macro.getFoodExpense(), net)));
@@ -109,13 +109,15 @@ public class FinancialReportPromptBuilder {
                 formatDecimal(macro.getCommunicationExpense()), calcPct(macro.getCommunicationExpense(), net)));
         sb.append(String.format("  7. 保险保费 (INSURANCE)            : ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getInsuranceExpense()), calcPct(macro.getInsuranceExpense(), net)));
-        sb.append(String.format("  8. 物业管理 (PROPERTY_MANAGEMENT)  : ￥%s 元 (占比: %s)\n",
+        sb.append(String.format("  8. 居住物业与公用事业 (PROPERTY_MANAGEMENT: 物业/供电/水/燃气): ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getPropertyExpense()), calcPct(macro.getPropertyExpense(), net)));
         sb.append(String.format("  9. 旅游文旅 (TRAVEL)               : ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getTravelExpense()), calcPct(macro.getTravelExpense(), net)));
-        sb.append(String.format(" 10. 个人转账 (PERSONAL_TRANSFER)     : ￥%s 元 (占比: %s)\n",
+        sb.append(String.format(" 10. 爱车养护与车辆服务 (CAR_EXPENSE: 4S店/维保/保养等): ￥%s 元 (占比: %s)\n",
+                formatDecimal(macro.getCarExpense()), calcPct(macro.getCarExpense(), net)));
+        sb.append(String.format(" 11. 个人转账 (PERSONAL_TRANSFER)     : ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getPersonalTransferExpense()), calcPct(macro.getPersonalTransferExpense(), net)));
-        sb.append(String.format(" 11. 其他杂项支出 (OTHER)            : ￥%s 元 (占比: %s)\n",
+        sb.append(String.format(" 12. 其他杂项支出 (OTHER)            : ￥%s 元 (占比: %s)\n",
                 formatDecimal(macro.getOtherExpense()), calcPct(macro.getOtherExpense(), net)));
 
         if (macro.getMaxSingleAmount() != null && macro.getMaxSingleAmount().compareTo(BigDecimal.ZERO) > 0) {

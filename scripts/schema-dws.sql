@@ -21,8 +21,16 @@ SELECT
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='TRANSFER' and currency='CNY', amount, 0)) AS total_transfer,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='FOOD', amount, 0)) AS food_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRANSPORT', amount, 0)) AS transport_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='ONLINE_SHOPPING', amount, 0)) AS online_shopping_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OFFLINE_SHOPPING', amount, 0)) AS offline_shopping_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='SHOPPING', amount, 0)) AS shopping_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='MEDICAL', amount, 0)) AS medical_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='COMMUNICATION', amount, 0)) AS communication_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='INSURANCE', amount, 0)) AS insurance_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PROPERTY_MANAGEMENT', amount, 0)) AS property_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRAVEL', amount, 0)) AS travel_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='CAR_EXPENSE', amount, 0)) AS car_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PERSONAL_TRANSFER', amount, 0)) AS personal_transfer_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OTHER', amount, 0)) AS other_expense,
     max(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE', amount, null)) AS max_single_amount
 FROM iceberg.finance.dwd_financial_transactions
@@ -32,7 +40,7 @@ GROUP BY date(tx_time), day_of_week(tx_time);
 CREATE OR REPLACE VIEW iceberg.finance.dws_financial_summary_weekly AS
 SELECT 
     year_of_week(tx_time) AS stat_year,
-    week(tx_time) AS stat_week,
+    week(tx_time) AS week,
     concat(cast(year_of_week(tx_time) as varchar), '-W', lpad(cast(week(tx_time) as varchar), 2, '0')) AS week_period,
     min(date(tx_time)) AS week_start_date,
     max(date(tx_time)) AS week_end_date,
@@ -50,8 +58,17 @@ SELECT
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and day_of_week(tx_time) between 1 and 5, amount, 0)) AS weekday_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='FOOD', amount, 0)) AS food_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRANSPORT', amount, 0)) AS transport_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='ONLINE_SHOPPING', amount, 0)) AS online_shopping_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OFFLINE_SHOPPING', amount, 0)) AS offline_shopping_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='SHOPPING', amount, 0)) AS shopping_expense,
-    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='MEDICAL', amount, 0)) AS medical_expense
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='MEDICAL', amount, 0)) AS medical_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='COMMUNICATION', amount, 0)) AS communication_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='INSURANCE', amount, 0)) AS insurance_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PROPERTY_MANAGEMENT', amount, 0)) AS property_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRAVEL', amount, 0)) AS travel_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='CAR_EXPENSE', amount, 0)) AS car_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PERSONAL_TRANSFER', amount, 0)) AS personal_transfer_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OTHER', amount, 0)) AS other_expense
 FROM iceberg.finance.dwd_financial_transactions
 GROUP BY year_of_week(tx_time), week(tx_time);
 
@@ -72,9 +89,18 @@ SELECT
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and card_tail='3342', amount, 0)) AS cgb_expense_cny,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='FOOD', amount, 0)) AS food_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRANSPORT', amount, 0)) AS transport_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='ONLINE_SHOPPING', amount, 0)) AS online_shopping_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OFFLINE_SHOPPING', amount, 0)) AS offline_shopping_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='SHOPPING', amount, 0)) AS shopping_expense,
     sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='MEDICAL', amount, 0)) AS medical_expense,
-    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OTHER', amount, 0)) AS other_expense
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='COMMUNICATION', amount, 0)) AS communication_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='INSURANCE', amount, 0)) AS insurance_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PROPERTY_MANAGEMENT', amount, 0)) AS property_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='TRAVEL', amount, 0)) AS travel_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='CAR_EXPENSE', amount, 0)) AS car_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='PERSONAL_TRANSFER', amount, 0)) AS personal_transfer_expense,
+    sum(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE' and category='OTHER', amount, 0)) AS other_expense,
+    max(if(is_valid_tx and direction='OUTFLOW' and tx_type='EXPENSE', amount, null)) AS max_single_amount
 FROM iceberg.finance.dwd_financial_transactions
 GROUP BY date_format(tx_time, '%Y-%m');
 

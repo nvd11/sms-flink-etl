@@ -25,7 +25,7 @@ class FinancialReportPromptBuilderTest {
                 new BigDecimal("367.04"), new BigDecimal("5.90"), new BigDecimal("361.14"),
                 BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("44.90"), new BigDecimal("25.98"), new BigDecimal("32.39"), new BigDecimal("263.77"),
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("185.22"), "盒马鲜生"
         );
 

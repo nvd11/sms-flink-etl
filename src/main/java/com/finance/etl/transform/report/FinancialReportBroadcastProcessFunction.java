@@ -318,6 +318,7 @@ public class FinancialReportBroadcastProcessFunction
         BigDecimal insuranceExpense = BigDecimal.ZERO;
         BigDecimal propertyExpense = BigDecimal.ZERO;
         BigDecimal travelExpense = BigDecimal.ZERO;
+        BigDecimal carExpense = BigDecimal.ZERO;
         BigDecimal personalTransferExpense = BigDecimal.ZERO;
         BigDecimal otherExpense = BigDecimal.ZERO;
 
@@ -339,6 +340,7 @@ public class FinancialReportBroadcastProcessFunction
                         case "INSURANCE" -> insuranceExpense = insuranceExpense.add(amt);
                         case "PROPERTY_MANAGEMENT" -> propertyExpense = propertyExpense.add(amt);
                         case "TRAVEL" -> travelExpense = travelExpense.add(amt);
+                        case "CAR_EXPENSE" -> carExpense = carExpense.add(amt);
                         case "PERSONAL_TRANSFER" -> personalTransferExpense = personalTransferExpense.add(amt);
                         default -> otherExpense = otherExpense.add(amt);
                     }
@@ -395,6 +397,7 @@ public class FinancialReportBroadcastProcessFunction
                 insuranceExpense,
                 propertyExpense,
                 travelExpense,
+                carExpense,
                 personalTransferExpense,
                 otherExpense,
                 null,
