@@ -46,7 +46,7 @@ jobs:
   dispatch-batch-job:
     name: Dispatch Ephemeral Batch Job to NUC
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Setup SSH Key & Execute Batch Job on K3s
@@ -92,11 +92,11 @@ jobs:
             echo "🚀 [Stage: ${stage_name^^}] Preparing dispatch for Job: ${job_name} (Target Schema: ${TARGET_ENV})"
             echo "================================================================================"
 
-            # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME, REPORT_PERIOD, REPORT_VALUE 与镜像，并放宽 activeDeadlineSeconds 为 600s)
+            # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME, REPORT_PERIOD, REPORT_VALUE 与镜像，并放宽 activeDeadlineSeconds 为 1200s)
             run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${job_name} -n batch-jobs --dry-run=client -o json" \
               | jq --arg schema "${TARGET_ENV}" --arg stage "${stage_name}" --arg rperiod "${REPORT_PERIOD}" --arg rval "${REPORT_VALUE}" --arg img "${OVERRIDE_IMAGE}" '
-                  .spec.activeDeadlineSeconds = 600 |
-                  .spec.template.spec.activeDeadlineSeconds = 600 |
+                  .spec.activeDeadlineSeconds = 1200 |
+                  .spec.template.spec.activeDeadlineSeconds = 1200 |
                   .spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) 
                     | map(select(.name != "ICEBERG_CATALOG_SCHEMA" and .name != "FLINK_JOB_NAME" and .name != "REPORT_PERIOD" and .name != "REPORT_VALUE")) 
                     + [
@@ -111,9 +111,9 @@ jobs:
               | run_ssh "sudo kubectl apply -f -"
             echo "✅ Job ${job_name} dispatched to K3s successfully!"
 
-            # 轮询等待 Job 执行完成并打印日志 (最多 600 秒 / 10 分钟)
+            # 轮询等待 Job 执行完成并打印日志 (最多 1200 秒 / 20 分钟)
             echo "⏳ Waiting for ${stage_name^^} execution to complete on NUC..."
-            if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=600s job/${job_name} -n batch-jobs"; then
+            if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=1200s job/${job_name} -n batch-jobs"; then
               echo "❌ Job ${job_name} did not complete in time. Inspecting pod status and logs:"
               run_ssh "sudo kubectl describe pods -n batch-jobs -l job-name=${job_name} || true"
               run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=100 || true"
