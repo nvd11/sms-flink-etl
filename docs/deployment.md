@@ -67,7 +67,7 @@
 * **调度时区**: `Asia/Shanghai`（原生北京时间，1400 万次/月 终身免费配额）
 * **调度器清单**:
   1. `test-sms-flink-cron`: `cron(0 0,4,8,12,16,20 * * ? *)` · 每 4 小时触发一次 ODS & DWD 增量入湖批处理
-  2. `sms-flink-report-daily`: `cron(0 22 * * ? *)` · 每日 22:00 自动触发 Flink Daily 财务分析与 Slack 推送
+  2. `sms-flink-report-daily`: `cron(50 23 * * ? *)` · 每日 23:50 自动触发 Flink Daily 财务分析与 Slack 推送 (覆盖当晚全部消费)
   3. `sms-flink-report-weekly`: `cron(0 9 ? * MON *)` · 每周一 09:00 自动触发 Flink Weekly 财务复盘与 Slack 推送
   4. `sms-flink-report-monthly`: `cron(30 9 1 * ? *)` · 每月 1 号 09:30 自动触发 Flink Monthly 财务月度分析与 Slack 推送
 * **触发目标 (Target)**: 调用 GitHub 官方工作流触发 API
