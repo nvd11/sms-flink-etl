@@ -1,0 +1,111 @@
+name: Maintain Iceberg Lakehouse
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_threshold:
+        description: 'Snapshot retention threshold (e.g. 7d, 3d, 1d)'
+        required: false
+        default: '7d'
+      target_env:
+        description: 'Target Schema (finance, finance_dev, or all)'
+        required: false
+        default: 'finance'
+        type: choice
+        options:
+          - finance
+          - finance_dev
+          - all
+  schedule:
+    # 对应北京时间每周一凌晨 04:00 (UTC 周日 20:00) 自动执行一次快照归档修剪
+    - cron: '0 20 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  expire-snapshots:
+    name: Expire Iceberg Snapshots via Trino
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Setup SSH & Execute Trino Expire Snapshots
+        env:
+          SSH_HOST: ${{ secrets.K3S_SSH_HOST }}
+          SSH_USER: ${{ secrets.K3S_SSH_USER }}
+          SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
+          RETENTION: ${{ inputs.retention_threshold || '7d' }}
+          TARGET_ENV: ${{ inputs.target_env || 'finance' }}
+        run: |
+          set -euo pipefail
+
+          # 1. 建立临时 SSH 凭证环境
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          cat << 'EOF' >> ~/.ssh/config
+          Host *
+            ControlMaster auto
+            ControlPath ~/.ssh/cm-%r@%h:%p
+            ControlPersist 10m
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 15
+            ServerAliveInterval 15
+            ServerAliveCountMax 3
+            ConnectionAttempts 3
+          EOF
+
+          run_ssh() {
+            ssh "${SSH_USER}@${SSH_HOST}" "$@"
+          }
+
+          maintain_schema() {
+            local schema="$1"
+            echo "================================================================================"
+            echo "🧹 [Lakehouse Maintenance] Expiring snapshots for schema '${schema}' (Retention: ${RETENTION})..."
+            echo "================================================================================"
+
+            local sql="
+              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
+              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
+              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
+              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
+            "
+
+            run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${sql}\""
+            echo "✅ Maintenance SQL executed successfully for schema: ${schema}"
+
+            echo "📊 [Current Snapshot Counts in ${schema}]:"
+            local query_sql="
+              SELECT 'raw_sms_records' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"raw_sms_records\$snapshots\"
+              UNION ALL
+              SELECT 'dwd_financial_transactions' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"dwd_financial_transactions\$snapshots\"
+              UNION ALL
+              SELECT 'etl_sync_offsets' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"etl_sync_offsets\$snapshots\"
+              UNION ALL
+              SELECT 'ads_financial_reports' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"ads_financial_reports\$snapshots\";
+            "
+            local stats
+            stats=$(run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${query_sql}\"")
+            echo "$stats"
+
+            echo "### 🧹 [Schema: ${schema}] Iceberg Snapshot Maintenance Report" >> "$GITHUB_STEP_SUMMARY"
+            echo "• **Retention Threshold**: \`${RETENTION}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            echo "$stats" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "${TARGET_ENV}" = "all" ]; then
+            maintain_schema "finance"
+            maintain_schema "finance_dev"
+          else
+            maintain_schema "${TARGET_ENV}"
+          fi
+
+          echo "================================================================================"
+          echo "🎉 All requested lakehouse maintenance operations completed successfully!"
+          echo "================================================================================"
