@@ -81,13 +81,13 @@ jobs:
 
             echo "📊 [Current Snapshot Counts in ${schema}]:"
             local query_sql="
-              SELECT 'raw_sms_records' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"raw_sms_records\$snapshots\"
+              SELECT 'raw_sms_records' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"raw_sms_records\\\$snapshots\\\"
               UNION ALL
-              SELECT 'dwd_financial_transactions' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"dwd_financial_transactions\$snapshots\"
+              SELECT 'dwd_financial_transactions' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"dwd_financial_transactions\\\$snapshots\\\"
               UNION ALL
-              SELECT 'etl_sync_offsets' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"etl_sync_offsets\$snapshots\"
+              SELECT 'etl_sync_offsets' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$snapshots\\\"
               UNION ALL
-              SELECT 'ads_financial_reports' as tbl, count(*) as snapshots FROM iceberg.${schema}.\"ads_financial_reports\$snapshots\";
+              SELECT 'ads_financial_reports' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"ads_financial_reports\\\$snapshots\\\";
             "
             local stats
             stats=$(run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${query_sql}\"")
