@@ -69,6 +69,7 @@ jobs:
             echo "================================================================================"
 
             local sql="
+              SET SESSION iceberg.expire_snapshots_min_retention = '1d';
               ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
