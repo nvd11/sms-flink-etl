@@ -1,4 +1,5 @@
 name: Trigger NUC Batch Runner
+run-name: "Batch ETL [${{ inputs.pipeline_stage || 'all' }} | ${{ inputs.report_period || 'INCREMENTAL' }} | ${{ inputs.target_env || 'finance' }}]"
 
 on:
   workflow_dispatch:
