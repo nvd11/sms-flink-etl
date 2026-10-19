@@ -6,7 +6,7 @@ on:
       retention_threshold:
         description: 'Snapshot retention threshold (e.g. 7d, 3d, 1d)'
         required: false
-        default: '7d'
+        default: '3d'
       target_env:
         description: 'Target Schema (finance, finance_dev, or all)'
         required: false
@@ -16,9 +16,6 @@ on:
           - finance
           - finance_dev
           - all
-  schedule:
-    # 对应北京时间每周一凌晨 04:00 (UTC 周日 20:00) 自动执行一次快照归档修剪
-    - cron: '0 20 * * 0'
 
 permissions:
   contents: read
@@ -35,7 +32,7 @@ jobs:
           SSH_HOST: ${{ secrets.K3S_SSH_HOST }}
           SSH_USER: ${{ secrets.K3S_SSH_USER }}
           SSH_KEY: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
-          RETENTION: ${{ inputs.retention_threshold || '7d' }}
+          RETENTION: ${{ inputs.retention_threshold || '3d' }}
           TARGET_ENV: ${{ inputs.target_env || 'finance' }}
         run: |
           set -euo pipefail
