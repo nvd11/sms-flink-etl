@@ -59,35 +59,80 @@ jobs:
           EOF
 
           run_ssh() {
-            ssh "${SSH_USER}@${SSH_HOST}" "$@"
+            local attempt=1
+            local max_attempts=3
+            while [ $attempt -le $max_attempts ]; do
+              if ssh "${SSH_USER}@${SSH_HOST}" "$@"; then
+                return 0
+              fi
+              echo "⚠️ [SSH Retry] Attempt ${attempt}/${max_attempts} failed. Retrying in 3 seconds..." >&2
+              sleep 3
+              attempt=$((attempt + 1))
+            done
+            echo "❌ [SSH Error] All ${max_attempts} attempts failed!" >&2
+            return 1
           }
 
           maintain_schema() {
             local schema="$1"
             echo "================================================================================"
-            echo "🧹 [Lakehouse Maintenance] Expiring snapshots for schema '${schema}' (Retention: ${RETENTION})..."
+            echo "🧹 [Lakehouse Maintenance] Optimizing files, manifests & expiring snapshots for '${schema}' (Retention: ${RETENTION})..."
             echo "================================================================================"
 
             local sql="
               SET SESSION iceberg.expire_snapshots_min_retention = '1d';
+
+              -- 1. 合并碎片小文件与 Equality Delete 文件 (Compaction)
+              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize;
+              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize;
+              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize;
+              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE optimize;
+              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize;
+
+              -- 2. 合并重写 Manifest 元数据清单 (Manifest Compaction)
+              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize_manifests;
+              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize_manifests;
+              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize_manifests;
+              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE optimize_manifests;
+              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize_manifests;
+
+              -- 3. 清理过期历史快照 (Snapshot Expiration)
               ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
+              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
             "
 
             run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${sql}\""
-            echo "✅ Maintenance SQL executed successfully for schema: ${schema}"
+            echo "✅ Maintenance SQL (optimize + optimize_manifests + expire_snapshots) executed successfully for schema: ${schema}"
 
-            echo "📊 [Current Snapshot Counts in ${schema}]:"
+            echo "📊 [Current Snapshot & File Counts in ${schema}]:"
             local query_sql="
-              SELECT 'raw_sms_records' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"raw_sms_records\\\$snapshots\\\"
+              SELECT 'raw_sms_records' as tbl,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"raw_sms_records\\\$snapshots\\\") as snapshots,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"raw_sms_records\\\$manifests\\\") as manifests,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"raw_sms_records\\\$files\\\") as files
               UNION ALL
-              SELECT 'dwd_financial_transactions' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"dwd_financial_transactions\\\$snapshots\\\"
+              SELECT 'dwd_financial_transactions' as tbl,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"dwd_financial_transactions\\\$snapshots\\\") as snapshots,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"dwd_financial_transactions\\\$manifests\\\") as manifests,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"dwd_financial_transactions\\\$files\\\") as files
               UNION ALL
-              SELECT 'etl_sync_offsets' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$snapshots\\\"
+              SELECT 'etl_sync_offsets' as tbl,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$snapshots\\\") as snapshots,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$manifests\\\") as manifests,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$files\\\") as files
               UNION ALL
-              SELECT 'ads_financial_reports' as tbl, count(*) as snapshots FROM iceberg.${schema}.\\\"ads_financial_reports\\\$snapshots\\\";
+              SELECT 'etl_job_executions' as tbl,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$snapshots\\\") as snapshots,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$manifests\\\") as manifests,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$files\\\") as files
+              UNION ALL
+              SELECT 'ads_financial_reports' as tbl,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"ads_financial_reports\\\$snapshots\\\") as snapshots,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"ads_financial_reports\\\$manifests\\\") as manifests,
+                     (SELECT count(*) FROM iceberg.${schema}.\\\"ads_financial_reports\\\$files\\\") as files;
             "
             local stats
             stats=$(run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${query_sql}\"")

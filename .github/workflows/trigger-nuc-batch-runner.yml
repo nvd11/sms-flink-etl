@@ -83,7 +83,18 @@ jobs:
           EOF
 
           run_ssh() {
-            ssh "${SSH_USER}@${SSH_HOST}" "$@"
+            local attempt=1
+            local max_attempts=3
+            while [ $attempt -le $max_attempts ]; do
+              if ssh "${SSH_USER}@${SSH_HOST}" "$@"; then
+                return 0
+              fi
+              echo "⚠️ [SSH Retry] Attempt ${attempt}/${max_attempts} failed. Retrying in 3 seconds..." >&2
+              sleep 3
+              attempt=$((attempt + 1))
+            done
+            echo "❌ [SSH Error] All ${max_attempts} attempts failed!" >&2
+            return 1
           }
 
           execute_stage() {
@@ -94,7 +105,9 @@ jobs:
             echo "================================================================================"
 
             # 动态组装并执行拉起命令 (精准注入 ICEBERG_CATALOG_SCHEMA, FLINK_JOB_NAME, REPORT_PERIOD, REPORT_VALUE 与镜像，并放宽 activeDeadlineSeconds 为 1200s)
-            run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${job_name} -n batch-jobs --dry-run=client -o json" \
+            local job_json
+            job_json=$(run_ssh "sudo kubectl create job --from=cronjob/nuc-batch-runner ${job_name} -n batch-jobs --dry-run=client -o json")
+            echo "$job_json" \
               | jq --arg schema "${TARGET_ENV}" --arg stage "${stage_name}" --arg rperiod "${REPORT_PERIOD}" --arg rval "${REPORT_VALUE}" --arg img "${OVERRIDE_IMAGE}" '
                   .spec.activeDeadlineSeconds = 1200 |
                   .spec.template.spec.activeDeadlineSeconds = 1200 |
@@ -108,8 +121,8 @@ jobs:
                     + (if $rval != "" then [{"name": "REPORT_VALUE", "value": $rval}] else [] end)
                   ) |
                   if ($img != "") then .spec.template.spec.containers[0].image = $img else . end
-                ' \
-              | run_ssh "sudo kubectl apply -f -"
+                ' > /tmp/job-manifest.json
+            run_ssh "sudo kubectl apply -f -" < /tmp/job-manifest.json
             echo "✅ Job ${job_name} dispatched to K3s successfully!"
 
             # 轮询等待 Job 执行完成并打印日志 (最多 1200 秒 / 20 分钟)
