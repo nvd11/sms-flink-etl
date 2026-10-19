@@ -86,21 +86,18 @@ jobs:
               ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize;
               ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize;
               ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize;
-              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE optimize;
               ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize;
 
               -- 2. 合并重写 Manifest 元数据清单 (Manifest Compaction)
               ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize_manifests;
               ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize_manifests;
               ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize_manifests;
-              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE optimize_manifests;
               ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize_manifests;
 
               -- 3. 清理过期历史快照 (Snapshot Expiration)
               ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
-              ALTER TABLE iceberg.${schema}.etl_job_executions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
               ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
             "
 
@@ -123,11 +120,6 @@ jobs:
                      (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$snapshots\\\") as snapshots,
                      (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$manifests\\\") as manifests,
                      (SELECT count(*) FROM iceberg.${schema}.\\\"etl_sync_offsets\\\$files\\\") as files
-              UNION ALL
-              SELECT 'etl_job_executions' as tbl,
-                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$snapshots\\\") as snapshots,
-                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$manifests\\\") as manifests,
-                     (SELECT count(*) FROM iceberg.${schema}.\\\"etl_job_executions\\\$files\\\") as files
               UNION ALL
               SELECT 'ads_financial_reports' as tbl,
                      (SELECT count(*) FROM iceberg.${schema}.\\\"ads_financial_reports\\\$snapshots\\\") as snapshots,
