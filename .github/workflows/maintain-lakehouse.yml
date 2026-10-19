@@ -58,6 +58,9 @@ jobs:
             ConnectionAttempts 3
           EOF
 
+          # 脚本退出时主动销毁 SSH ControlMaster 后台进程，防止 GitHub Runner 挂起等待
+          trap 'ssh -O exit "${SSH_USER}@${SSH_HOST}" 2>/dev/null || true' EXIT
+
           run_ssh() {
             local attempt=1
             local max_attempts=3
