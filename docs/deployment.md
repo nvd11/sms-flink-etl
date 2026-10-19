@@ -43,7 +43,7 @@
  ┌────────────────────────────────────────────────────────┐
  │ 1. 云端定时吹哨人: AWS EventBridge Scheduler           │
  │ - 区域: ap-southeast-1 (新加坡机房 · 终身 1400万次免费) │
- │ - 规则: cron(0 0,4,8,12,16,20 * * ? *) · Asia/Shanghai │
+ │ - 规则: rate(10 minutes) · UTC (每 10 分钟准实时入湖)  │
  │ - 动作: 到点调用 GitHub 官方 API 触发 workflow_dispatch│
  └───────────────────────────┬────────────────────────────┘
                              │ HTTPS POST /dispatches
@@ -64,12 +64,12 @@
 ```
 
 ### 2.1 AWS EventBridge Scheduler 触发配置规范
-* **调度时区**: `Asia/Shanghai`（原生北京时间，1400 万次/月 终身免费配额）
+* **调度时区**: `UTC` / `Asia/Shanghai`（1400 万次/月 终身免费配额）
 * **调度器清单**:
-  1. `test-sms-flink-cron`: `cron(0 0,4,8,12,16,20 * * ? *)` · 每 4 小时触发一次 ODS & DWD 增量入湖批处理
-  2. `sms-flink-report-daily`: `cron(50 23 * * ? *)` · 每日 23:50 自动触发 Flink Daily 财务分析与 Slack 推送 (覆盖当晚全部消费)
-  3. `sms-flink-report-weekly`: `cron(0 9 ? * MON *)` · 每周一 09:00 自动触发 Flink Weekly 财务复盘与 Slack 推送
-  4. `sms-flink-report-monthly`: `cron(30 9 1 * ? *)` · 每月 1 号 09:30 自动触发 Flink Monthly 财务月度分析与 Slack 推送
+  1. `test-sms-flink-cron`: `rate(10 minutes)` (`UTC`) · 每 10 分钟准实时触发一次 Gmail ➔ Iceberg ODS & DWD 增量入湖批处理
+  2. `sms-flink-report-daily`: `cron(50 23 * * ? *)` (`Asia/Shanghai`) · 每日 23:50 自动触发 Flink Daily 财务分析与 Slack 推送 (覆盖当晚全部消费)
+  3. `sms-flink-report-weekly`: `cron(0 9 ? * MON *)` (`Asia/Shanghai`) · 每周一 09:00 自动触发 Flink Weekly 财务复盘与 Slack 推送
+  4. `sms-flink-report-monthly`: `cron(30 9 1 * ? *)` (`Asia/Shanghai`) · 每月 1 号 09:30 自动触发 Flink Monthly 财务月度分析与 Slack 推送
 * **触发目标 (Target)**: 调用 GitHub 官方工作流触发 API
   * **目标 URL**: `https://api.github.com/repos/nvd11/sms-flink-etl/actions/workflows/trigger-nuc-batch-runner.yml/dispatches`
   * **HTTP Method**: `POST`
@@ -131,8 +131,9 @@ metadata:
   name: flink-sms-batch-etl
   namespace: default
 spec:
-  # 🎯 每 4 小时触发一次 (对应北京时间: 08:00, 12:00, 16:00, 20:00, 00:00, 04:00)
-  schedule: "0 */4 * * *"
+  # 🎯 本地 CronJob 已设为 suspend: true，统一由 AWS EventBridge Scheduler (rate(10 minutes)) 远程唤醒
+  suspend: true
+  schedule: "0 0 31 2 *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5

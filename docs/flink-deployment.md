@@ -126,8 +126,9 @@ metadata:
   labels:
     app: flink-sms-etl
 spec:
-  # 🎯 每 4 小时触发一次 (对应北京时间: 08:00, 12:00, 16:00, 20:00, 00:00, 04:00)
-  schedule: "0 */4 * * *"
+  # 🎯 本地 CronJob 已设为 suspend: true，统一由 AWS EventBridge Scheduler (rate(10 minutes)) 远程唤醒
+  suspend: true
+  schedule: "0 0 31 2 *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5

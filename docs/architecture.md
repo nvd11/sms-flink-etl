@@ -59,7 +59,7 @@
   * 若完全依赖本地 NUC 系统时钟自调度，一旦家庭网络临时断网、关机或宿主机时钟漂移，可能发生定时漏跑；
   * 若在本地常驻一个 HTTP 服务专门监听外部调度，又会违背 Flink 零常驻的精简初衷。
 * **决策**：建立 **三级弹性调度闭环体系**：
-  1. **云端定时吹哨人 (AWS EventBridge Scheduler)**：在 AWS 新加坡机房配置原生支持 `Asia/Shanghai` 的定时调度任务（`cron(0 0,4,8,12,16,20 * * ? *)`），享有每月 **1400 万次永久免费** 配额，到点自动向 GitHub 官方 API 发起 dispatch 请求；
+  1. **云端定时吹哨人 (AWS EventBridge Scheduler)**：在 AWS 新加坡机房配置定时调度任务（`rate(10 minutes)` 准实时增量入湖，以及原生支持 `Asia/Shanghai` 的日报/周报/月报 `cron`），享有每月 **1400 万次永久免费** 配额，到点自动向 GitHub 官方 API 发起 dispatch 请求；
   2. **调度编排中枢 (GitHub Actions Workflow)**：接收 GitHub 官方的 `workflow_dispatch` 事件，执行环境预检与监控记录，随后向本地 NUC 发送批处理唤醒信号；
   3. **批计算执行端 (NUC K3s Flink)**：本地 K3s 动态拉起批处理 Job，运行 10~20 秒将增量短信规整并写入 Cloudflare R2，完成后优雅退出并 100% 释放内存。
 * **架构收益**：

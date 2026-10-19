@@ -22,7 +22,7 @@ flowchart TD
     end
 
     subgraph TriggerChain ["调度与触发链路 (云端精准指挥)"]
-        AWS["AWS EventBridge Scheduler (新加坡机房 · cron 每4小时)"]
+        AWS["AWS EventBridge Scheduler (新加坡机房 · rate 每10分钟)"]
         GHA["GitHub Actions 调度编排中枢"]
         AWS -->|HTTPS POST| GHA
     end
@@ -54,7 +54,7 @@ flowchart TD
 
 整个链路环环相扣：
 1. **数据源**：交易短信汇聚在 Gmail 作为原始报文缓冲区；
-2. **云端精准吹哨**：由 AWS EventBridge Scheduler 维持北京时间（`Asia/Shanghai`）每 4 小时吹一次哨，向 GitHub Actions 发起调用，本地无需常驻外部 Web 监听；
+2. **云端精准吹哨**：由 AWS EventBridge Scheduler 每 10 分钟（`rate(10 minutes)`）准实时吹一次哨，向 GitHub Actions 发起调用，本地无需常驻外部 Web 监听；
 3. **本地算完即焚**：NUC 收到指令，就地复印一个独立的 Job Pod，启动内嵌 Flink 引擎，15 秒内拉取数据写入 Cloudflare R2 上的 Apache Iceberg 表，随即正常退出；
 4. **统一湖仓查账**：同驻 NUC 的轻量 Trino 引擎直读 R2，提供毫秒级 ANSI SQL 检索与时间旅行（Time Travel）审计。
 

@@ -2,7 +2,7 @@
 
 基于 **AWS EventBridge Scheduler (云端精准调度) + GitHub Actions Workflow (编排中枢) + Flink on NUC (K3s 弹性批处理) + Trino on NUC (ArgoCD 湖仓查询) + Cloudflare R2 (Iceberg 零出口费存储)** 的现代化个人全自动动账记账与开放数据湖仓 (Lakehouse) 架构。
 
-本项目设计并落地将来自手机端（小米 15 HyperOS + SmsForwarder）经网易 163 SMTP 中继汇聚至 Alice Gmail（`alice.h.y.he@gmail.com`）的银行交易动账短信（广发 95508）、微信支付凭证及支付宝出账通知；由云端 **AWS EventBridge Scheduler** 每 4 小时吹哨，通过 API 触发 **GitHub Actions Workflow** 调度中枢，安全唤醒本地 **Intel NUC (`Nova`)** K3s 节点上的 **Flink 批处理流水线** 进行增量抓取、结构化清洗与元数据规整，写入开放湖仓表格式 **Apache Iceberg** 并持久化沉淀于 **Cloudflare R2** 对象存储中，同时由同驻 NUC 的 **Trino MPP 查询引擎** 提供极致标准的 ANSI SQL 查询与金融审计切片分析体验。
+本项目设计并落地将来自手机端（小米 15 HyperOS + SmsForwarder）经网易 163 SMTP 中继汇聚至 Alice Gmail（`alice.h.y.he@gmail.com`）的银行交易动账短信（广发 95508）、微信支付凭证及支付宝出账通知；由云端 **AWS EventBridge Scheduler** 每 10 分钟（`rate(10 minutes)`）准实时吹哨，通过 API 触发 **GitHub Actions Workflow** 调度中枢，安全唤醒本地 **Intel NUC (`Nova`)** K3s 节点上的 **Flink 批处理流水线** 进行增量抓取、结构化清洗与元数据规整，写入开放湖仓表格式 **Apache Iceberg** 并持久化沉淀于 **Cloudflare R2** 对象存储中，同时由同驻 NUC 的 **Trino MPP 查询引擎** 提供极致标准的 ANSI SQL 查询与金融审计切片分析体验。
 
 ---
 
@@ -25,7 +25,7 @@
 ================================= ⏰ 调度与触发链路 =================================
 +-----------------------------------------------------------------------------------+
 |  1. [云端精准定时器] AWS EventBridge Scheduler (新加坡机房 · 每月 1400 万次免费)   |
-|  - 调度规则: cron(0 0,4,8,12,16,20 * * ? *) · Asia/Shanghai (北京时间每 4 小时)    |
+|  - 调度规则: rate(10 minutes) · UTC (每 10 分钟准实时增量入湖)                     |
 |  - 动作: 到点自动向 GitHub 官方 API 发起 dispatch 调用，0 本地常驻负担             |
 +-----------------------------------------+-----------------------------------------+
                                           | HTTPS POST 触发 GitHub Workflow Dispatch
