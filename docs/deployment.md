@@ -66,7 +66,7 @@
 ### 2.1 AWS EventBridge Scheduler 触发配置规范
 * **调度时区**: `UTC` / `Asia/Shanghai`（1400 万次/月 终身免费配额）
 * **调度器清单**:
-  1. `test-sms-flink-cron`: `rate(10 minutes)` (`UTC`) · 每 10 分钟准实时触发一次 Gmail ➔ Iceberg ODS & DWD 增量入湖批处理
+  1. `sms-flink-ingest-10m`: `rate(10 minutes)` (`UTC`) · 每 10 分钟准实时触发一次 Gmail ➔ Iceberg ODS & DWD 增量入湖批处理
   2. `sms-flink-report-daily`: `cron(50 23 * * ? *)` (`Asia/Shanghai`) · 每日 23:50 自动触发 Flink Daily 财务分析与 Slack 推送 (覆盖当晚全部消费)
   3. `sms-flink-report-weekly`: `cron(0 9 ? * MON *)` (`Asia/Shanghai`) · 每周一 09:00 自动触发 Flink Weekly 财务复盘与 Slack 推送
   4. `sms-flink-report-monthly`: `cron(30 9 1 * ? *)` (`Asia/Shanghai`) · 每月 1 号 09:30 自动触发 Flink Monthly 财务月度分析与 Slack 推送
