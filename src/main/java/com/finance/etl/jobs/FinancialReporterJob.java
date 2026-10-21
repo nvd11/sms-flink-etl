@@ -121,6 +121,7 @@ public class FinancialReporterJob {
         int parallelism = ConfigUtils.getInt("FLINK_PARALLELISM", 1);
         Configuration flinkConf = new Configuration();
         flinkConf.set(TaskManagerOptions.NUM_TASK_SLOTS, parallelism);
+        flinkConf.setString("classloader.check-leaked-classloader", "false");
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(flinkConf);
         env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         env.setParallelism(parallelism);

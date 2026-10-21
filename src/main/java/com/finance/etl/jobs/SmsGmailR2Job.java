@@ -41,6 +41,7 @@ public class SmsGmailR2Job {
         int parallelism = ConfigUtils.getInt("FLINK_PARALLELISM", 2);
         Configuration flinkConf = new Configuration();
         flinkConf.set(TaskManagerOptions.NUM_TASK_SLOTS, parallelism);
+        flinkConf.setString("classloader.check-leaked-classloader", "false");
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(flinkConf);
         env.setRuntimeMode(RuntimeExecutionMode.BATCH); // 🎯 核心铁律：显式声明为 BATCH 模式！
         env.setParallelism(parallelism);
@@ -82,6 +83,8 @@ public class SmsGmailR2Job {
             errorMsg = e.getMessage();
             throw e;
         } finally {
+            // 恢复当前线程 ContextClassLoader，防止 Flink MiniCluster 关闭后遺留 Closed ClassLoader 导致后续 S3A / XMLReaderFactory 报错
+            Thread.currentThread().setContextClassLoader(SmsGmailR2Job.class.getClassLoader());
             java.time.Instant endTime = java.time.Instant.now();
             long runtimeMs = executionResult != null ? executionResult.getNetRuntime() :
                     (endTime.toEpochMilli() - startTime.toEpochMilli());
