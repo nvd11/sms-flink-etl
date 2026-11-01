@@ -23,6 +23,7 @@ public class FinancialChatModelFactory {
     public static final String DEFAULT_MODEL_NAME = "deepseek-v4-pro-0813";
     public static final double DEFAULT_TEMPERATURE = 0.3;
     public static final int DEFAULT_TIMEOUT_SECONDS = 180;
+    public static final int DEFAULT_MAX_TOKENS = 8192;
 
     /**
      * 工厂方法：从环境变量与 .env 自适应装配生产就绪的 ChatLanguageModel
@@ -33,23 +34,31 @@ public class FinancialChatModelFactory {
         String modelName = ConfigUtils.get("LLM_MODEL_NAME", DEFAULT_MODEL_NAME);
         double temperature = Double.parseDouble(ConfigUtils.get("LLM_TEMPERATURE", String.valueOf(DEFAULT_TEMPERATURE)));
         int timeoutSeconds = ConfigUtils.getInt("LLM_TIMEOUT", DEFAULT_TIMEOUT_SECONDS);
+        int maxTokens = ConfigUtils.getInt("LLM_MAX_TOKENS", DEFAULT_MAX_TOKENS);
 
-        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds);
+        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, maxTokens);
     }
 
     /**
      * 参数化构造通用 ChatLanguageModel (保持重载兼容)
      */
     public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature) {
-        return create(baseUrl, apiKey, modelName, temperature, DEFAULT_TIMEOUT_SECONDS);
+        return create(baseUrl, apiKey, modelName, temperature, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_TOKENS);
     }
 
     /**
      * 参数化构造通用 ChatLanguageModel (支持自定义超时)
      */
     public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature, int timeoutSeconds) {
-        LOG.info("🤖 [Model Factory] Assembling OpenAiChatModel for LiteLLM: endpoint='{}', model='{}', temp={}, timeout={}s",
-                baseUrl, modelName, temperature, timeoutSeconds);
+        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, DEFAULT_MAX_TOKENS);
+    }
+
+    /**
+     * 参数化构造通用 ChatLanguageModel (支持自定义超时与最大Token数)
+     */
+    public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature, int timeoutSeconds, int maxTokens) {
+        LOG.info("🤖 [Model Factory] Assembling OpenAiChatModel for LiteLLM: endpoint='{}', model='{}', temp={}, timeout={}s, maxTokens={}",
+                baseUrl, modelName, temperature, timeoutSeconds, maxTokens);
 
         return OpenAiChatModel.builder()
                 .baseUrl(baseUrl)
@@ -57,6 +66,7 @@ public class FinancialChatModelFactory {
                 .modelName(modelName)
                 .temperature(temperature != null ? temperature : DEFAULT_TEMPERATURE)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                .maxTokens(maxTokens)
                 .maxRetries(2)
                 .logRequests(true)
                 .logResponses(true)
