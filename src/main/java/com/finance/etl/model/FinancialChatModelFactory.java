@@ -23,7 +23,7 @@ public class FinancialChatModelFactory {
     public static final String DEFAULT_MODEL_NAME = "deepseek-v4-pro-0813";
     public static final double DEFAULT_TEMPERATURE = 0.3;
     public static final int DEFAULT_TIMEOUT_SECONDS = 180;
-    public static final int DEFAULT_MAX_TOKENS = 8192;
+    public static final int DEFAULT_MAX_TOKENS = 16384;
 
     /**
      * 工厂方法：从环境变量与 .env 自适应装配生产就绪的 ChatLanguageModel
