@@ -128,12 +128,50 @@ jobs:
             run_ssh "sudo kubectl apply -f -" < /tmp/job-manifest.json
             echo "✅ Job ${job_name} dispatched to K3s successfully!"
 
-            # 轮询等待 Job 执行完成并打印日志 (最多 1200 秒 / 20 分钟)
+            # 轮询等待 Job 执行完成并打印日志 (监听 Complete 或 Failed 条件，最多等待 1200 秒 / 20 分钟)
             echo "⏳ Waiting for ${stage_name^^} execution to complete on NUC..."
-            if ! run_ssh "sudo kubectl wait --for=condition=complete --timeout=1200s job/${job_name} -n batch-jobs"; then
-              echo "❌ Job ${job_name} did not complete in time. Inspecting pod status and logs:"
+            local wait_start=$(date +%s)
+            local job_status=""
+            while true; do
+              local current_time=$(date +%s)
+              local elapsed=$((current_time - wait_start))
+              if [ $elapsed -ge 1200 ]; then
+                echo "❌ [Timeout] Job ${job_name} timed out after 1200 seconds."
+                job_status="TIMEOUT"
+                break
+              fi
+
+              # 快速检查 Job 是否已完成或失败
+              local check_json
+              check_json=$(run_ssh "sudo kubectl get job ${job_name} -n batch-jobs -o json 2>/dev/null || true")
+              if [ -n "$check_json" ]; then
+                local succeeded
+                succeeded=$(echo "$check_json" | jq -r '.status.succeeded // 0')
+                local failed
+                failed=$(echo "$check_json" | jq -r '.status.failed // 0')
+                if [ "$succeeded" -gt 0 ]; then
+                  job_status="SUCCEEDED"
+                  echo "🎉 Job ${job_name} completed successfully in ${elapsed}s!"
+                  break
+                fi
+                if [ "$failed" -gt 0 ]; then
+                  # 检查 Pod 状态是否已处于 CrashLoopBackOff 或 Error
+                  local pod_phase
+                  pod_phase=$(run_ssh "sudo kubectl get pods -n batch-jobs -l job-name=${job_name} -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true")
+                  if [ "$pod_phase" = "CrashLoopBackOff" ] || [ "$failed" -ge 3 ]; then
+                    job_status="FAILED"
+                    echo "❌ Job ${job_name} failed (Pod in ${pod_phase:-Error}) in ${elapsed}s!"
+                    break
+                  fi
+                fi
+              fi
+              sleep 5
+            done
+
+            if [ "$job_status" != "SUCCEEDED" ]; then
+              echo "❌ Job ${job_name} did not succeed (status: ${job_status}). Inspecting pod status and logs immediately:"
               run_ssh "sudo kubectl describe pods -n batch-jobs -l job-name=${job_name} || true"
-              run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=100 || true"
+              run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=150 || true"
               exit 1
             fi
 
