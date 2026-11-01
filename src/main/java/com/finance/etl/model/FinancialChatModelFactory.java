@@ -20,10 +20,10 @@ public class FinancialChatModelFactory {
     // 默认私有统一网关配置
     public static final String DEFAULT_BASE_URL = "http://100.105.130.0:31880/v1";
     public static final String DEFAULT_API_KEY = "sk-yui-40b9abf5a3612e48aa25111afbc4f813"; // Yui 专属 Higress Virtual Key
-    public static final String DEFAULT_MODEL_NAME = "deepseek-v4-pro-0813";
+    public static final String DEFAULT_MODEL_NAME = "gemini-3.8-flash";
     public static final double DEFAULT_TEMPERATURE = 0.3;
     public static final int DEFAULT_TIMEOUT_SECONDS = 180;
-    public static final int DEFAULT_MAX_TOKENS = 16384;
+    public static final int DEFAULT_MAX_TOKENS = 8192;
 
     /**
      * 工厂方法：从环境变量与 .env 自适应装配生产就绪的 ChatLanguageModel
@@ -35,32 +35,41 @@ public class FinancialChatModelFactory {
         double temperature = Double.parseDouble(ConfigUtils.get("LLM_TEMPERATURE", String.valueOf(DEFAULT_TEMPERATURE)));
         int timeoutSeconds = ConfigUtils.getInt("LLM_TIMEOUT", DEFAULT_TIMEOUT_SECONDS);
         int maxTokens = ConfigUtils.getInt("LLM_MAX_TOKENS", DEFAULT_MAX_TOKENS);
+        String higressProvider = ConfigUtils.get("HIGRESS_LLM_PROVIDER", null);
 
-        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, maxTokens);
+        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, maxTokens, higressProvider);
     }
 
     /**
      * 参数化构造通用 ChatLanguageModel (保持重载兼容)
      */
     public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature) {
-        return create(baseUrl, apiKey, modelName, temperature, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_TOKENS);
+        return create(baseUrl, apiKey, modelName, temperature, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_TOKENS, null);
     }
 
     /**
      * 参数化构造通用 ChatLanguageModel (支持自定义超时)
      */
     public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature, int timeoutSeconds) {
-        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, DEFAULT_MAX_TOKENS);
+        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, DEFAULT_MAX_TOKENS, null);
     }
 
     /**
      * 参数化构造通用 ChatLanguageModel (支持自定义超时与最大Token数)
      */
     public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature, int timeoutSeconds, int maxTokens) {
-        LOG.info("🤖 [Model Factory] Assembling OpenAiChatModel for LiteLLM: endpoint='{}', model='{}', temp={}, timeout={}s, maxTokens={}",
-                baseUrl, modelName, temperature, timeoutSeconds, maxTokens);
+        return create(baseUrl, apiKey, modelName, temperature, timeoutSeconds, maxTokens, null);
+    }
 
-        return OpenAiChatModel.builder()
+    /**
+     * 全参数构造通用 ChatLanguageModel (支持自定义 Header，如 Higress Provider 路由)
+     */
+    public static ChatLanguageModel create(String baseUrl, String apiKey, String modelName, Double temperature,
+                                           int timeoutSeconds, int maxTokens, String higressProvider) {
+        LOG.info("🤖 [Model Factory] Assembling OpenAiChatModel: endpoint='{}', model='{}', temp={}, timeout={}s, maxTokens={}, provider='{}'",
+                baseUrl, modelName, temperature, timeoutSeconds, maxTokens, higressProvider);
+
+        var builder = OpenAiChatModel.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
@@ -69,7 +78,15 @@ public class FinancialChatModelFactory {
                 .maxTokens(maxTokens)
                 .maxRetries(2)
                 .logRequests(true)
-                .logResponses(true)
-                .build();
+                .logResponses(true);
+
+        if (higressProvider != null && !higressProvider.trim().isEmpty()) {
+            builder.customHeaders(java.util.Map.of("x-higress-llm-provider", higressProvider.trim()));
+        } else if (modelName != null && modelName.toLowerCase().contains("gemini")) {
+            // 自适应默认路由：如果是 gemini 模型且未显式指定 provider，自动挂载 openai-proxy 路由
+            builder.customHeaders(java.util.Map.of("x-higress-llm-provider", "openai-proxy-for-antigravity"));
+        }
+
+        return builder.build();
     }
 }
