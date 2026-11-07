@@ -15,7 +15,7 @@ import java.util.Objects;
  * 财务分析智能体核心本体 (FinancialAdvisorAgent)
  * 职责：
  * 纯粹的领域分析大脑 (Pure Logic)。
- * 整合 LangChain4j 的 ChatLanguageModel (直连 LiteLLM Gemini-3.8-Flash) 与 FinancialChartTools (@Tool 绘图武器库)，
+ * 整合 LangChain4j 的 ChatLanguageModel (直连 Higress · DeepSeek-V4.1-Flash-1017) 与 FinancialChartTools (@Tool 绘图武器库)，
  * 装配声明式 FinancialAdvisorService 代理，专职提供高质量、零幻觉的财务分析研报数据生成。
  * 【解法一 · 架构重构】：
  * 在 generateReport 方法内部根据 context.getPeriodType() 执行多态分流，

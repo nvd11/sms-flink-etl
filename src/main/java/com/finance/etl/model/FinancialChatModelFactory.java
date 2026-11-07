@@ -11,7 +11,7 @@ import java.time.Duration;
 /**
  * 财务大模型实例装配工厂 (FinancialChatModelFactory)
  * 职责：
- * 作为全局单一真理源，专职负责生产配置就绪的 ChatLanguageModel (Gemini 3.8 Flash) 实例。
+ * 作为全局单一真理源，专职负责生产配置就绪的 ChatLanguageModel (Higress · DeepSeek V4.1 Flash 1017) 实例。
  * 遵循姿势 A：直连私有 LiteLLM 统一网关，注入 Yui 专属凭证，配置低温与严谨财务审计日志。
  */
 public class FinancialChatModelFactory {
@@ -20,7 +20,7 @@ public class FinancialChatModelFactory {
     // 默认私有统一网关配置
     public static final String DEFAULT_BASE_URL = "http://100.105.130.0:31880/v1";
     public static final String DEFAULT_API_KEY = "sk-yui-40b9abf5a3612e48aa25111afbc4f813"; // Yui 专属 Higress Virtual Key
-    public static final String DEFAULT_MODEL_NAME = "gemini-3.8-flash";
+    public static final String DEFAULT_MODEL_NAME = "deepseek-v4.1-flash-1017";
     public static final double DEFAULT_TEMPERATURE = 0.3;
     public static final int DEFAULT_TIMEOUT_SECONDS = 180;
     public static final int DEFAULT_MAX_TOKENS = 8192;
@@ -82,9 +82,6 @@ public class FinancialChatModelFactory {
 
         if (higressProvider != null && !higressProvider.trim().isEmpty()) {
             builder.customHeaders(java.util.Map.of("x-higress-llm-provider", higressProvider.trim()));
-        } else if (modelName != null && modelName.toLowerCase().contains("gemini")) {
-            // 自适应默认路由：如果是 gemini 模型且未显式指定 provider，自动挂载 openai-proxy 路由
-            builder.customHeaders(java.util.Map.of("x-higress-llm-provider", "openai-proxy-for-antigravity"));
         }
 
         return builder.build();

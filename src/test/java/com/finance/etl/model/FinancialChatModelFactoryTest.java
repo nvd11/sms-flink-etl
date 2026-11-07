@@ -20,8 +20,8 @@ class FinancialChatModelFactoryTest {
     }
 
     @Test
-    @DisplayName("实测连通性：向私有 LiteLLM 统一网关发送 Ping 请求，验证 Gemini 3.8 Flash 正常响应")
-    void testLiteLlmGatewayConnectivityWithGemini() {
+    @DisplayName("实测连通性：向私有 LiteLLM 统一网关发送 Ping 请求，验证 DeepSeek V4.1 Flash 1017 正常响应")
+    void testLiteLlmGatewayConnectivityWithDeepSeek() {
         ChatLanguageModel model = FinancialChatModelFactory.fromConfig();
 
         LOG.info("📡 Sending Ping message to LiteLLM Gateway via LangChain4j...");
@@ -31,6 +31,6 @@ class FinancialChatModelFactoryTest {
 
         assertNotNull(response);
         assertFalse(response.trim().isEmpty(), "大模型响应内容不应为空");
-        LOG.info("✨ [Gemini Response Received]: {}", response);
+        LOG.info("✨ [DeepSeek Response Received]: {}", response);
     }
 }
