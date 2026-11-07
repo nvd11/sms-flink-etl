@@ -19,7 +19,8 @@ public class FinancialChatModelFactory {
 
     // 默认私有统一网关配置
     public static final String DEFAULT_BASE_URL = "http://100.105.130.0:31880/v1";
-    public static final String DEFAULT_API_KEY = "sk-yui-40b9abf5a3612e48aa25111afbc4f813"; // Yui 专属 Higress Virtual Key
+    // ⚠️ 安全红线：严禁在此硬编码任何真实 Key！必须通过 LLM_API_KEY 环境变量 / .env 注入。
+    public static final String DEFAULT_API_KEY = "";
     public static final String DEFAULT_MODEL_NAME = "deepseek-v4.1-flash-1017";
     public static final double DEFAULT_TEMPERATURE = 0.3;
     public static final int DEFAULT_TIMEOUT_SECONDS = 180;
