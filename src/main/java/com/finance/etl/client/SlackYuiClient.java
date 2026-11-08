@@ -142,9 +142,81 @@ public class SlackYuiClient {
             return false;
         }
 
-        String blocksJson = convertMarkdownToBlocksJson(markdownReport);
+        // 第 1 道防线：逐张校验 Markdown 图片链接，剔除无效/不可下载的图表短链，
+        // 避免 Slack 因单个 image_url 下载失败而把整条卡片判为 invalid_blocks 全量丢弃。
+        String sanitizedMarkdown = stripUnreachableImages(markdownReport);
+        String blocksJson = convertMarkdownToBlocksJson(sanitizedMarkdown);
         String previewText = "🌸 Yui 财务分析研报已就绪（含可视化图表）";
-        return postBlockMessage(channel, previewText, blocksJson);
+
+        boolean ok = postBlockMessage(channel, previewText, blocksJson);
+        if (ok) {
+            return true;
+        }
+
+        // 第 2 道防线：富文本卡片仍失败时，剥离全部图片后以纯文本重试一次，
+        // 确保“宁可少一张图，也绝不整条消息丢失”。
+        LOG.warn("♻️ [SlackYuiClient] Rich card delivery failed. Retrying once with text-only fallback (all images stripped)...");
+        String textOnlyBlocks = convertMarkdownToBlocksJson(stripAllImages(markdownReport));
+        boolean fallbackOk = postBlockMessage(channel, "🌸 Yui 财务分析研报已就绪（纯文本兜底）", textOnlyBlocks);
+        if (fallbackOk) {
+            LOG.info("✅ [SlackYuiClient] Text-only fallback delivered successfully to channel: {}", channel);
+        } else {
+            LOG.error("🚨 [ALERT] Slack delivery FAILED even after text-only fallback. Master will NOT receive this report. channel={}", channel);
+        }
+        return fallbackOk;
+    }
+
+    /**
+     * 图片链接健康校验（第 1 道防线）：
+     * 对 Markdown 中的每张图片发起 HEAD 探测，仅保留真正返回 200 且 Content-Type 为 image/* 的链接；
+     * 失效链接会被替换为其 alt 文本，从而保住整条 Slack 卡片。
+     */
+    private String stripUnreachableImages(String markdown) {
+        Matcher matcher = MARKDOWN_IMG_PATTERN.matcher(markdown);
+        StringBuffer sb = new StringBuffer();
+        int dropped = 0;
+        while (matcher.find()) {
+            String altText = matcher.group(1).trim();
+            String imageUrl = matcher.group(2).trim();
+            String replacement;
+            if (isReachableImage(imageUrl)) {
+                replacement = matcher.group(0);
+            } else {
+                dropped++;
+                replacement = altText.isEmpty() ? "" : altText;
+            }
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(sb);
+        if (dropped > 0) {
+            LOG.warn("🛡️ [SlackYuiClient] Dropped {} unreachable image(s) from Slack payload to protect card delivery.", dropped);
+        }
+        return sb.toString();
+    }
+
+    private boolean isReachableImage(String imageUrl) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(imageUrl))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .header("User-Agent", "sms-flink-etl-slack-guard/1.0")
+                    .timeout(Duration.ofSeconds(8))
+                    .build();
+            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+            String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
+            boolean valid = response.statusCode() == 200 && contentType.startsWith("image/");
+            if (!valid) {
+                LOG.warn("⚠️ [SlackYuiClient] Image URL rejected (status={}, content-type='{}'): {}",
+                        response.statusCode(), contentType, imageUrl);
+            }
+            return valid;
+        } catch (Exception e) {
+            LOG.warn("⚠️ [SlackYuiClient] Image URL validation error ({}): {}", e.getMessage(), imageUrl);
+            return false;
+        }
+    }
+
+    private static String stripAllImages(String markdown) {
+        return MARKDOWN_IMG_PATTERN.matcher(markdown).replaceAll("");
     }
 
     /**

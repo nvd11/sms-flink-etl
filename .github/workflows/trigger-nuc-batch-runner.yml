@@ -177,8 +177,16 @@ jobs:
 
             # 获取 Pod 输出日志并记录到 Summary
             local logs
-            logs=$(run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=100")
-            
+            logs=$(run_ssh "sudo kubectl logs -n batch-jobs -l job-name=${job_name} --tail=2000")
+
+            # 🚨 失败告警：业务代码在 Slack 投递彻底失败时会打出 [ALERT] 标记。
+            # 此处主动将阶段判定为失败，让 GitHub Actions 的失败通知替主人盯住投递链路。
+            if echo "$logs" | grep -qF '[ALERT]'; then
+              echo "🚨 [ALERT] Delivery failure marker detected in ${stage_name^^} logs. Failing this stage for visibility."
+              echo "$logs" | grep -F '[ALERT]' || true
+              exit 1
+            fi
+
             echo "### 📊 [Stage: ${stage_name^^}] Batch Execution Logs on NUC Nova" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             echo "$logs" >> "$GITHUB_STEP_SUMMARY"

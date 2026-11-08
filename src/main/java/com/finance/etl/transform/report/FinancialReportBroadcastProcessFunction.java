@@ -298,6 +298,14 @@ public class FinancialReportBroadcastProcessFunction
         record.setSlackStatus(slackStatus);
         record.setCreatedAt(Instant.now());
 
+        // 🚨 失败告警：Slack 投递失败不会让 Flink 作业失败，因此必须显式打出稳定标记，
+        // 既便于 VictoriaLogs 告警规则捕获，也供 GitHub Actions 工作流识别并将阶段标记为失败。
+        if ("FAILED".equals(slackStatus)) {
+            LOG.error("🚨 [ALERT] Slack delivery FAILED for {} ({}:{}). "
+                            + "Report is persisted to ADS with slack_status=FAILED; please inspect SlackYuiClient logs.",
+                    reportId, periodType, periodValue);
+        }
+
         return record;
     }
 
