@@ -2,6 +2,7 @@ package com.finance.etl.repository;
 
 import com.finance.etl.model.SyncOffset;
 import com.finance.etl.util.ConfigUtils;
+import com.finance.etl.util.RetryUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.*;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -72,33 +73,39 @@ public class IcebergOffsetRepository implements Closeable {
     public long getLatestOffset(String jobName, String channel, String sourceTarget) {
         LOG.info("🌊 [Offset Repo] Probing latest offset for job='{}', channel='{}', target='{}'...",
                 jobName, channel, sourceTarget);
+        int attempts = ConfigUtils.getInt("ICEBERG_CATALOG_RETRY_ATTEMPTS", 5);
+        long initialDelayMs = ConfigUtils.getInt("ICEBERG_CATALOG_RETRY_DELAY_MS", 2000);
+
         try {
-            Table table = loadOffsetTable();
-            long maxOffset = 0L;
+            long maxOffset = RetryUtils.retry("Read Iceberg offset watermark", attempts, initialDelayMs, () -> {
+                Table table = loadOffsetTable();
+                long currentMax = 0L;
 
-            try (CloseableIterable<Record> records = IcebergGenerics.read(table)
-                    .where(Expressions.and(
-                            Expressions.equal("job_name", jobName),
-                            Expressions.equal("channel", channel)
-                    ))
-                    .build()) {
+                try (CloseableIterable<Record> records = IcebergGenerics.read(table)
+                        .where(Expressions.and(
+                                Expressions.equal("job_name", jobName),
+                                Expressions.equal("channel", channel)
+                        ))
+                        .build()) {
 
-                for (Record record : records) {
-                    String target = (String) record.getField("source_target");
-                    if (sourceTarget == null || sourceTarget.equals(target)) {
-                        Long offset = (Long) record.getField("last_offset");
-                        if (offset != null && offset > maxOffset) {
-                            maxOffset = offset;
+                    for (Record record : records) {
+                        String target = (String) record.getField("source_target");
+                        if (sourceTarget == null || sourceTarget.equals(target)) {
+                            Long offset = (Long) record.getField("last_offset");
+                            if (offset != null && offset > currentMax) {
+                                currentMax = offset;
+                            }
                         }
                     }
                 }
-            }
+                return currentMax;
+            });
 
             LOG.info("🌊 [Offset Repo] Successfully discovered latest synced offset: {} from Iceberg {}.{}",
                     maxOffset, schemaName, tableName);
             return maxOffset;
         } catch (Exception e) {
-            LOG.warn("⚠️ [Offset Repo] Failed to query Iceberg offset table ({}.{}): {}. Defaulting to 0L.",
+            LOG.warn("⚠️ [Offset Repo] Failed to query Iceberg offset table ({}.{}) after retries: {}. Defaulting to 0L.",
                     schemaName, tableName, e.getMessage());
             return 0L;
         }

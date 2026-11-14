@@ -132,6 +132,8 @@ jobs:
             echo "⏳ Waiting for ${stage_name^^} execution to complete on NUC..."
             local wait_start=$(date +%s)
             local job_status=""
+            local job_seen=0
+            local missing_count=0
             while true; do
               local current_time=$(date +%s)
               local elapsed=$((current_time - wait_start))
@@ -145,6 +147,8 @@ jobs:
               local check_json
               check_json=$(run_ssh "sudo kubectl get job ${job_name} -n batch-jobs -o json 2>/dev/null || true")
               if [ -n "$check_json" ]; then
+                job_seen=1
+                missing_count=0
                 local succeeded
                 succeeded=$(echo "$check_json" | jq -r '.status.succeeded // 0')
                 local failed
@@ -163,6 +167,15 @@ jobs:
                     echo "❌ Job ${job_name} failed (Pod in ${pod_phase:-Error}) in ${elapsed}s!"
                     break
                   fi
+                fi
+              elif [ "$job_seen" -eq 1 ]; then
+                # 🎯 快速失败：Job 曾存在但随后消失（通常是崩溃后触发 TTL 清理），
+                # 不再傻等 1200 秒，连续 6 次（约 30 秒）确认消失后立即判失败。
+                missing_count=$((missing_count + 1))
+                if [ "$missing_count" -ge 6 ]; then
+                  job_status="DISAPPEARED"
+                  echo "❌ Job ${job_name} disappeared from cluster (likely crashed and was TTL-cleaned) after ${elapsed}s. Failing fast."
+                  break
                 fi
               fi
               sleep 5

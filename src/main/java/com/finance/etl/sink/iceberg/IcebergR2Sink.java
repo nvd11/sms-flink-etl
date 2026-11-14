@@ -4,6 +4,7 @@ import com.finance.etl.model.SyncOffset;
 import com.finance.etl.repository.IcebergCatalogFactory;
 import com.finance.etl.repository.IcebergOffsetRepository;
 import com.finance.etl.util.ConfigUtils;
+import com.finance.etl.util.RetryUtils;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.table.data.RowData;
@@ -147,6 +148,10 @@ public class IcebergR2Sink implements Serializable {
         LOG.info("🧊 [Iceberg Sink] Assembling Cloudflare R2 Iceberg Sink (table: {}.{}, writeParallelism={}, upsert={}, equalityColumns={})...",
                 schemaName, tableName, writeParallelism, upsert, equalityColumns);
 
+        // 🛡️ 第 1 道防线：提交作业前先带指数退避地探测 Catalog 连通性，
+        // 避免一次瞬时 DNS / TCP 抖动直接让整个批处理作业在启动阶段崩溃。
+        warmUpCatalog();
+
         // 🎯 核心委托：底层 S3A 文件系统、JDBC Catalog 与 TableLoader 装配全部收敛于工厂单一真理源
         TableLoader tableLoader = IcebergCatalogFactory.createTableLoader(schemaName, tableName);
 
@@ -165,6 +170,35 @@ public class IcebergR2Sink implements Serializable {
 
         LOG.info("✅ [Iceberg Sink] Successfully mounted Iceberg Sink to target table: {}.{}", schemaName, tableName);
         return sink;
+    }
+
+    /**
+     * 提交作业前的 Catalog 连通性预热探针 (带指数退避重试)。
+     *
+     * <p>背景：FlinkSink 在 append() 阶段会立即打开 TableLoader 并连接 CockroachDB Catalog。
+     * 集群 DNS 偶发抖动时，一次解析失败就会让整个批处理在启动阶段崩溃。此处用独立 TableLoader
+     * 做一次轻量预热，失败则退避重试，显著降低偶发网络抖动导致的任务失败率。</p>
+     */
+    private void warmUpCatalog() {
+        int attempts = ConfigUtils.getInt("ICEBERG_CATALOG_RETRY_ATTEMPTS", 5);
+        long initialDelayMs = ConfigUtils.getInt("ICEBERG_CATALOG_RETRY_DELAY_MS", 2000);
+        String action = "Iceberg catalog warm-up (" + schemaName + "." + tableName + ")";
+
+        try {
+            RetryUtils.retry(action, attempts, initialDelayMs, () -> {
+                try (TableLoader probe = IcebergCatalogFactory.createTableLoader(schemaName, tableName)) {
+                    probe.open();
+                    if (probe.loadTable() == null) {
+                        throw new IllegalStateException("Iceberg table not found: " + schemaName + "." + tableName);
+                    }
+                }
+                LOG.info("✅ [Iceberg Sink] Catalog warm-up succeeded for {}.{}", schemaName, tableName);
+                return null;
+            });
+        } catch (Exception e) {
+            throw new RuntimeException("Iceberg catalog is unreachable after " + attempts
+                    + " attempt(s): " + schemaName + "." + tableName, e);
+        }
     }
 
     /**

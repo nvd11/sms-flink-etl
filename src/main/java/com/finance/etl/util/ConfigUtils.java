@@ -14,6 +14,14 @@ public class ConfigUtils {
     private static final Dotenv DOTENV;
 
     static {
+        // 🛡️ DNS 负缓存清零：集群 DNS 偶发抖动后，重试动作可立即重新解析，
+        // 避免被 JVM 默认 10 秒的 NXDOMAIN 缓存拖住导致退避重试形同虚设。
+        try {
+            java.security.Security.setProperty("networkaddress.cache.negative.ttl", "0");
+        } catch (Exception ignored) {
+            // 受限环境下无法修改安全属性时静默忽略
+        }
+
         Dotenv loaded = null;
         try {
             // 自动检索当前目录及父目录的 .env 文件，若缺失则静默忽略 (适合生产无文件纯环境变量容器)
