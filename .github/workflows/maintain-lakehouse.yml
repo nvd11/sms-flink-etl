@@ -24,7 +24,7 @@ jobs:
   expire-snapshots:
     name: Expire Iceberg Snapshots via Trino
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
 
     steps:
       - name: Setup SSH & Execute Trino Expire Snapshots
@@ -79,29 +79,32 @@ jobs:
             echo "🧹 [Lakehouse Maintenance] Optimizing files, manifests & expiring snapshots for '${schema}' (Retention: ${RETENTION})..."
             echo "================================================================================"
 
-            local sql="
-              SET SESSION iceberg.expire_snapshots_min_retention = '1d';
+            # 🎯 拆分为独立语句逐条执行：单条失败/超时不会让整批前功尽弃，
+            # 同时便于在日志中精确看到当前进度，避免被整体超时一刀切。
+            local statements=(
+              "ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize"
+              "ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize"
+              "ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize"
+              "ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize"
+              "ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize_manifests"
+              "ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize_manifests"
+              "ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize_manifests"
+              "ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize_manifests"
+              "SET SESSION iceberg.expire_snapshots_min_retention = '1d'; ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}')"
+              "SET SESSION iceberg.expire_snapshots_min_retention = '1d'; ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}')"
+              "SET SESSION iceberg.expire_snapshots_min_retention = '1d'; ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}')"
+              "SET SESSION iceberg.expire_snapshots_min_retention = '1d'; ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE expire_snapshots(retention_threshold => '${RETENTION}')"
+            )
 
-              -- 1. 合并碎片小文件与 Equality Delete 文件 (Compaction)
-              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize;
-              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize;
-              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize;
-              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize;
+            local total=${#statements[@]}
+            local idx=0
+            for stmt in "${statements[@]}"; do
+              idx=$((idx + 1))
+              echo "▶️ [${idx}/${total}] ${stmt}"
+              run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${stmt}\""
+              echo "✅ [${idx}/${total}] statement completed."
+            done
 
-              -- 2. 合并重写 Manifest 元数据清单 (Manifest Compaction)
-              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE optimize_manifests;
-              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE optimize_manifests;
-              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE optimize_manifests;
-              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE optimize_manifests;
-
-              -- 3. 清理过期历史快照 (Snapshot Expiration)
-              ALTER TABLE iceberg.${schema}.raw_sms_records EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
-              ALTER TABLE iceberg.${schema}.dwd_financial_transactions EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
-              ALTER TABLE iceberg.${schema}.etl_sync_offsets EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
-              ALTER TABLE iceberg.${schema}.ads_financial_reports EXECUTE expire_snapshots(retention_threshold => '${RETENTION}');
-            "
-
-            run_ssh "sudo kubectl exec -n trino deployment/trino -- trino --execute \"${sql}\""
             echo "✅ Maintenance SQL (optimize + optimize_manifests + expire_snapshots) executed successfully for schema: ${schema}"
 
             echo "📊 [Current Snapshot & File Counts in ${schema}]:"
